@@ -1,0 +1,5 @@
+node_modules/
+web/app.bundle.js
+*.log
+*.tgz
+.DS_Store

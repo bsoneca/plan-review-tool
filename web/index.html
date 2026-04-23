@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>plan-review</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">
+        <span class="logo">plan-review</span>
+        <span id="plan-path" class="path"></span>
+      </div>
+      <div class="actions">
+        <button id="toggle-view" class="btn btn-ghost">Richer</button>
+        <button id="submit-review" class="btn btn-primary" disabled>
+          Submit review <span id="draft-count" class="badge">0</span>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <div id="editor" class="view"></div>
+      <div id="preview" class="view hidden"></div>
+    </main>
+
+    <dialog id="submit-dialog">
+      <form method="dialog">
+        <h2>Submit review</h2>
+        <p class="muted" id="submit-summary-line"></p>
+        <label for="summary">Overall summary (optional)</label>
+        <textarea id="summary" rows="4" placeholder="High-level notes about this review round..."></textarea>
+        <menu>
+          <button value="cancel" class="btn btn-ghost">Cancel</button>
+          <button id="confirm-submit" value="confirm" class="btn btn-primary">Submit</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="/app.bundle.js"></script>
+  </body>
+</html>

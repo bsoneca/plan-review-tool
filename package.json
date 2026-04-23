@@ -1,0 +1,38 @@
+{
+  "name": "plan-review-tool",
+  "version": "0.1.0",
+  "description": "GitHub-style inline review for Claude Code plan files",
+  "bin": {
+    "plan-review": "./bin/plan-review.js"
+  },
+  "scripts": {
+    "build": "esbuild web/app.js --bundle --format=iife --outfile=web/app.bundle.js --loader:.js=jsx",
+    "dev": "esbuild web/app.js --bundle --format=iife --outfile=web/app.bundle.js --watch",
+    "start": "node bin/plan-review.js",
+    "prepare": "npm run build",
+    "postinstall": "node scripts/install-command.js",
+    "install-command": "node scripts/install-command.js"
+  },
+  "files": [
+    "bin",
+    "server",
+    "web",
+    "commands",
+    "scripts"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "^6.2.5",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.26.3",
+    "codemirror": "^6.0.1",
+    "express": "^4.19.2",
+    "markdown-it": "^14.1.0",
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.4"
+  }
+}
