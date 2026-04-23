@@ -7,7 +7,7 @@ GitHub-style inline review for Claude Code plan files.
 One command:
 
 ```bash
-npm install -g github:<org>/plan-review-tool
+npm install -g github:bsoneca/plan-review-tool
 ```
 
 This clones the repo, builds the CodeMirror bundle, installs `plan-review` on your PATH, and drops two slash commands into `~/.claude/commands/`:
