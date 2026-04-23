@@ -1,36 +1,61 @@
 ---
-description: Read inline review comments on a plan file and revise the plan accordingly.
-argument-hint: [path-to-plan.md]
+description: Read inline review comments on a plan file or a git diff and revise the code accordingly.
+argument-hint: [path-to-plan.md | path-to-sidecar.comments.json]
 ---
 
-You are processing a review round on a Claude Code plan file that was annotated with the `plan-review` tool.
+You are processing a review round that was annotated with the `plan-review` tool. The review targets either a Claude Code plan markdown file, or a git diff (changes across one or more files in a repository). Detect which kind from the sidecar's top-level shape and branch.
 
 ## Inputs
 
-- `$ARGUMENTS` — optional path to the plan `.md` file. If empty, use the most recently modified `.md` file under `~/.claude/plans/` (sort by mtime, descending).
-- Sidecar file: sibling of the plan, named `<plan-basename>.comments.json`. For example, `foo.md` → `foo.comments.json`.
+- `$ARGUMENTS` — optional path. It can be:
+  1. A plan `.md` file; the sidecar is sibling `<plan-basename>.comments.json`.
+  2. A sidecar file directly (ends in `.comments.json`).
+  3. Empty — use the most recently modified `.md` file under `~/.claude/plans/`.
+
+Sidecar shapes:
+- **Plan sidecar**: top-level has `planFile`. Each comment has flat `startLine` / `endLine` fields. The plan file sits alongside the sidecar.
+- **Diff sidecar**: top-level has `target: { kind: "diff", repoRoot, base, head, slug }`. Each comment has a nested `location: { kind: "diff", file, side: "left"|"right", startLine, endLine }`.
+
+## Comment states
+
+Each comment has a `state` field, one of:
+
+- `open` — awaiting your action.
+- `done` — you already applied it.
+- `ack` — acknowledged, no code change needed.
+- `resolved` — reviewer closed the thread.
+
+Missing `state` → treat as `open`. Legacy plan sidecars may have `review.status = "addressed"` to indicate the whole review was already handled — in that case treat every comment in the review as closed.
 
 ## Steps
 
-1. **Resolve the plan path.** If `$ARGUMENTS` is empty, run `ls -t ~/.claude/plans/*.md | head -1` to find the most recent plan. Confirm the path with the user before proceeding.
-2. **Load the sidecar JSON.** If it doesn't exist, stop and tell the user there are no comments to review.
-3. **Filter to `status: "open"` reviews.** If none, stop and tell the user all reviews are already addressed.
-4. **Check plan drift.** Compute `sha256` of the plan file contents. For each open review:
-   - If `review.planSha` matches the current sha, the recorded `startLine`/`endLine` are still valid.
-   - If it doesn't match, locate each comment by searching for its `quotedText` in the current plan. Warn the user for any comment whose `quotedText` no longer appears verbatim.
-5. **Present a concise summary** of each open review and its comments to the user:
-   - Review id, summary, createdAt.
-   - For each comment: the anchored line range (or the drifted-but-located range), the quoted excerpt, and the comment body.
-6. **Revise the plan file** with the Edit tool, addressing each comment. Preserve the plan's existing section structure (Context / Approach / etc.). Do not rewrite sections that aren't touched by a comment.
-7. **Update the sidecar JSON** using the Edit tool:
-   - For each review you addressed, change `status` from `"open"` to `"addressed"`.
-   - For each comment in that review, add a new field `"resolution"` with a one-sentence note describing how the comment was handled in the revised plan.
-   - Preserve existing fields exactly — only add/modify what's called out above.
-8. **Report back** a bullet list of what changed in the plan and what remains open (if anything).
+1. **Resolve the input.** Derive the sidecar path:
+   - Argument ends with `.comments.json` → that is the sidecar.
+   - Argument ends with `.md` → sibling `<basename>.comments.json`.
+   - Empty → `ls -t ~/.claude/plans/*.md | head -1`, then derive the sidecar. Confirm the path with the user before proceeding.
+2. **Load the sidecar JSON.** Inspect the top-level shape to decide plan vs diff. If it doesn't exist, stop and tell the user there are no comments.
+3. **Filter to comments in state `open`.** If none, stop and tell the user all comments are already closed.
+4. **For a plan sidecar** — follow the existing plan workflow:
+   1. Compute `sha256` of the plan file contents. For each review containing open comments, verify `review.planSha` matches; if not, locate each comment via `quotedText` and warn on any that can't be found.
+   2. Present a summary of each open comment (review id, line range, quoted excerpt, body).
+   3. Revise the plan with the Edit tool, addressing each comment. Preserve section structure.
+   4. For each open comment you acted on, set its `state` to `"done"` and add a `resolutionNote`. If a comment is genuinely infeasible, use `"ack"` with a note explaining why.
+5. **For a diff sidecar** — operate against the repo at `target.repoRoot`:
+   1. `cd` into `target.repoRoot` (or resolve all file paths relative to it).
+   2. For each open comment, the relevant file is `<repoRoot>/<comment.location.file>`.
+   3. Use Edit with `comment.quotedText` as `old_string` to locate the exact place to modify.
+      - For `side: "right"`: the quoted text is from the NEW file (current working-tree state for `head: "WORKING"`, otherwise from `head`). Revise accordingly.
+      - For `side: "left"`: the quoted text is from the OLD file (`base`). A left-side comment usually means "don't delete this" or "explain this deletion" — interpret the comment body to decide whether to restore the old content, add a comment, or reply in `resolutionNote` with `state: "ack"` if no code change is warranted.
+   4. If the comment's file has been further changed and `quotedText` no longer appears verbatim, warn the user and ask how to proceed for that comment.
+   5. Present a summary of each open comment (file, side, line, quote, body) before making edits.
+   6. After each successful edit, set the comment's `state` to `"done"` and write a one-sentence `resolutionNote`.
+6. **Update the sidecar JSON** using the Edit tool. Preserve all existing fields; only mutate `state` and add `resolutionNote`.
+7. **Report back** a bullet list of what changed and what remains open (if anything).
 
 ## Rules
 
-- Never delete a review or a comment from the sidecar.
-- Never modify `planFile`, `id`, `createdAt`, `planSha`, `startLine`, `endLine`, `body`, or `quotedText`.
-- If a comment is genuinely infeasible, set its review's `status` to `"addressed"` anyway but write a `resolution` that explains why you couldn't apply it, and surface that clearly to the user.
-- If the plan has drifted enough that multiple `quotedText` snippets can't be located, stop after step 5 and ask the user how to proceed instead of guessing.
+- Never delete a comment or review from the sidecar.
+- Never modify `id`, `createdAt`, `planSha`, `baseSha`, `headSha`, `body`, `quotedText`, `startLine`, `endLine`, `location`.
+- Do not touch comments already in state `done`, `ack`, or `resolved` — they're closed.
+- For diff sidecars with `head: "WORKING"`, the "new" side is the live working tree; edits you make show up in the next review round.
+- If drift has rendered multiple quotes un-locatable, stop and ask the user how to proceed instead of guessing.

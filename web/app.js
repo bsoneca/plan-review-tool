@@ -12,17 +12,26 @@ import { defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import MarkdownIt from "markdown-it";
 
+// ==================== STATE ====================
+
 const store = {
-  plan: null,
+  target: null,
+  mode: null,
   drafts: [],
   reviews: [],
   nextDraftId: 1,
+  // plan-mode
+  plan: null,
   view: null,
   showingPreview: false,
+  // diff-mode
+  files: [],
+  viewedFiles: new Set(),
+  snapshots: [],
+  fileViewMode: {},
 };
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
-
 md.core.ruler.push("add_source_line", (state) => {
   for (const token of state.tokens) {
     if (!token.map) continue;
@@ -39,6 +48,8 @@ md.core.ruler.push("add_source_line", (state) => {
   }
 });
 
+// ==================== HELPERS ====================
+
 async function fetchJSON(url, options = {}) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -46,184 +57,6 @@ async function fetchJSON(url, options = {}) {
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
   return res.json();
-}
-
-const setThreadsEffect = StateEffect.define();
-
-const threadsField = StateField.define({
-  create: () => 0,
-  update(value, tr) {
-    for (const e of tr.effects) if (e.is(setThreadsEffect)) return value + 1;
-    return value;
-  },
-});
-
-const threadDecorations = EditorView.decorations.compute([threadsField], (state) => {
-  const doc = state.doc;
-  const all = [
-    ...store.drafts.map((d) => ({ ...d, kind: "draft" })),
-    ...store.reviews.flatMap((r) =>
-      r.comments.map((c) => ({ ...c, kind: r.status, review: r })),
-    ),
-  ];
-  const decos = [];
-  for (const t of all) {
-    const end = Math.min(doc.lines, Math.max(1, t.endLine));
-    const line = doc.line(end);
-    decos.push(
-      Decoration.widget({
-        widget: new ThreadWidget(t),
-        block: true,
-        side: 1,
-      }).range(line.to),
-    );
-  }
-  decos.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
-  return Decoration.set(decos);
-});
-
-function buildThreadDOM(t) {
-  const wrap = document.createElement("div");
-  wrap.className = `thread-widget ${t.kind}`;
-  // Stop CodeMirror from handling events inside the widget — otherwise its
-  // content handler preventDefaults mousedown and focus never reaches our textarea.
-  for (const ev of ["mousedown", "mouseup", "click", "keydown", "keyup", "input", "focusin"]) {
-    wrap.addEventListener(ev, (e) => e.stopPropagation());
-  }
-  populateThreadDOM(wrap, t);
-  return wrap;
-}
-
-function populateThreadDOM(wrap, t) {
-  const header = document.createElement("div");
-    header.className = "thread-header";
-    const range = t.startLine === t.endLine ? `Line ${t.startLine}` : `Lines ${t.startLine}–${t.endLine}`;
-    const snippet = t.quotedText ? ` · "${t.quotedText.replace(/\s+/g, " ").slice(0, 50)}${t.quotedText.length > 50 ? "…" : ""}"` : "";
-    if (t.kind === "draft") {
-      const label = t.saved ? "Saved draft" : "Draft";
-      header.innerHTML = `<span>${label} · ${range}${escapeHtml(snippet)}</span>`;
-      if (t.saved) {
-        const headerActions = document.createElement("span");
-        headerActions.style.display = "inline-flex";
-        headerActions.style.gap = "6px";
-
-        const edit = document.createElement("button");
-        edit.className = "btn btn-ghost";
-        edit.style.padding = "2px 8px";
-        edit.textContent = "Edit";
-        edit.addEventListener("click", (e) => {
-          e.preventDefault();
-          editDraft(t.id);
-        });
-        headerActions.appendChild(edit);
-
-        const del = document.createElement("button");
-        del.className = "btn btn-ghost btn-danger";
-        del.style.padding = "2px 8px";
-        del.textContent = "Discard";
-        del.addEventListener("click", (e) => {
-          e.preventDefault();
-          removeDraft(t.id);
-        });
-        headerActions.appendChild(del);
-        header.appendChild(headerActions);
-      }
-    } else {
-      const status = t.kind === "addressed" ? "Addressed" : "Open";
-      const summary = t.review?.summary ? ` · ${t.review.summary.slice(0, 60)}` : "";
-      header.innerHTML = `<span>${status} · ${range}${escapeHtml(snippet)}${escapeHtml(summary)}</span>`;
-    }
-    wrap.appendChild(header);
-
-    const body = document.createElement("div");
-    body.className = "thread-body";
-
-    if (t.kind === "draft") {
-      if (t.saved) {
-        const p = document.createElement("p");
-        p.textContent = t.body || "";
-        body.appendChild(p);
-      } else {
-        const composer = document.createElement("div");
-        composer.className = "thread-composer";
-        const ta = document.createElement("textarea");
-        ta.placeholder = "Leave a comment...";
-        ta.value = t.body || "";
-        ta.dataset.draft = t.id;
-        composer.appendChild(ta);
-
-        const actions = document.createElement("div");
-        actions.className = "actions";
-        actions.style.display = "flex";
-        actions.style.gap = "8px";
-        actions.style.padding = "6px 0 0";
-        actions.style.justifyContent = "flex-end";
-
-        const cancel = document.createElement("button");
-        cancel.className = "btn btn-ghost";
-        cancel.textContent = "Cancel";
-        cancel.addEventListener("click", (e) => {
-          e.preventDefault();
-          cancelDraft(t.id);
-        });
-        actions.appendChild(cancel);
-
-        const save = document.createElement("button");
-        save.className = "btn btn-primary";
-        save.textContent = "Save";
-        save.disabled = !ta.value.trim();
-        save.addEventListener("click", (e) => {
-          e.preventDefault();
-          saveDraft(t.id);
-        });
-        actions.appendChild(save);
-
-        ta.addEventListener("input", () => {
-          updateDraftBody(t.id, ta.value);
-          save.disabled = !ta.value.trim();
-        });
-        ta.addEventListener("keydown", (e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !save.disabled) {
-            e.preventDefault();
-            saveDraft(t.id);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            cancelDraft(t.id);
-          }
-        });
-
-        composer.appendChild(actions);
-        body.appendChild(composer);
-      }
-    } else {
-      const p = document.createElement("p");
-      p.textContent = t.body || "";
-      body.appendChild(p);
-      if (t.resolution) {
-        const r = document.createElement("p");
-        r.style.marginTop = "6px";
-        r.innerHTML = `<span class="muted">Resolution:</span> ${escapeHtml(t.resolution)}`;
-        body.appendChild(r);
-      }
-    }
-
-  wrap.appendChild(body);
-}
-
-class ThreadWidget extends WidgetType {
-  constructor(thread) {
-    super();
-    this.thread = thread;
-  }
-  eq(other) {
-    return JSON.stringify(other.thread) === JSON.stringify(this.thread);
-  }
-  ignoreEvent() {
-    return false;
-  }
-  toDOM() {
-    return buildThreadDOM(this.thread);
-  }
 }
 
 function escapeHtml(s) {
@@ -234,61 +67,233 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-class AddCommentMarker extends GutterMarker {
-  constructor(line) {
-    super();
-    this.line = line;
-  }
-  eq(other) {
-    return other.line === this.line;
-  }
-  toDOM() {
-    const el = document.createElement("span");
-    el.className = "cm-add-comment-marker";
-    el.textContent = "+";
-    el.title = "Add comment on this line (or current selection)";
-    el.dataset.line = String(this.line);
-    return el;
+function commentKind(c) {
+  return c.state || "open";
+}
+
+function commentStateLabel(state) {
+  switch (state) {
+    case "done": return "Done";
+    case "ack": return "Ack";
+    case "resolved": return "Resolved";
+    case "addressed": return "Addressed";
+    default: return "Open";
   }
 }
 
-const addCommentGutter = gutter({
-  class: "cm-add-comment-gutter",
-  lineMarker(view, line) {
-    const lineNum = view.state.doc.lineAt(line.from).number;
-    return new AddCommentMarker(lineNum);
-  },
-  initialSpacer: () => new AddCommentMarker(0),
-  domEventHandlers: {
-    mousedown(view, line, event) {
-      const target = event.target;
-      if (!(target instanceof HTMLElement) || !target.classList.contains("cm-add-comment-marker")) {
-        return false;
-      }
-      event.preventDefault();
-      const clickedLine = view.state.doc.lineAt(line.from).number;
-      const sel = view.state.selection.main;
-      let startLine, endLine;
-      if (!sel.empty) {
-        startLine = view.state.doc.lineAt(sel.from).number;
-        endLine = view.state.doc.lineAt(sel.to).number;
-      } else {
-        startLine = endLine = clickedLine;
-      }
-      addDraft(startLine, endLine);
-      return true;
-    },
-  },
-});
+function normalizeComment(c) {
+  if (!c.location && Number.isInteger(c.startLine)) {
+    c.location = { kind: "plan", startLine: c.startLine, endLine: c.endLine };
+  }
+  return c;
+}
 
-function addDraft(startLine, endLine, quotedText = null) {
-  // Dedupe only an *identical* anchor (same lines AND same quotedText).
-  // Multiple selections on the same line produce distinct drafts.
+function locRangeLabel(loc) {
+  if (!loc) return "";
+  const prefix = loc.kind === "diff" ? `${loc.file} ${loc.side === "left" ? "L" : "R"}` : "Line";
+  if (loc.kind === "diff") {
+    if (loc.startLine === loc.endLine) return `${loc.file} ${loc.side === "left" ? "L" : "R"}${loc.startLine}`;
+    return `${loc.file} ${loc.side === "left" ? "L" : "R"}${loc.startLine}–${loc.endLine}`;
+  }
+  if (loc.startLine === loc.endLine) return `Line ${loc.startLine}`;
+  return `Lines ${loc.startLine}–${loc.endLine}`;
+}
+
+// ==================== THREAD DOM ====================
+
+function buildThreadDOM(t) {
+  const wrap = document.createElement("div");
+  wrap.className = `thread-widget ${t.kind}`;
+  for (const ev of ["mousedown", "mouseup", "click", "keydown", "keyup", "input", "focusin"]) {
+    wrap.addEventListener(ev, (e) => e.stopPropagation());
+  }
+  populateThreadDOM(wrap, t);
+  return wrap;
+}
+
+function populateThreadDOM(wrap, t) {
+  const header = document.createElement("div");
+  header.className = "thread-header";
+  const range = locRangeLabel(t.location);
+  const snippet = t.quotedText
+    ? ` · "${t.quotedText.replace(/\s+/g, " ").slice(0, 50)}${t.quotedText.length > 50 ? "…" : ""}"`
+    : "";
+  if (t.kind === "draft") {
+    const label = t.saved ? "Saved draft" : "Draft";
+    header.innerHTML = `<span>${label} · ${range}${escapeHtml(snippet)}</span>`;
+    if (t.saved) {
+      const headerActions = document.createElement("span");
+      headerActions.style.display = "inline-flex";
+      headerActions.style.gap = "6px";
+
+      const edit = document.createElement("button");
+      edit.className = "btn btn-ghost";
+      edit.style.padding = "2px 8px";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", (e) => {
+        e.preventDefault();
+        editDraft(t.id);
+      });
+      headerActions.appendChild(edit);
+
+      const del = document.createElement("button");
+      del.className = "btn btn-ghost btn-danger";
+      del.style.padding = "2px 8px";
+      del.textContent = "Discard";
+      del.addEventListener("click", (e) => {
+        e.preventDefault();
+        removeDraft(t.id);
+      });
+      headerActions.appendChild(del);
+      header.appendChild(headerActions);
+    }
+  } else {
+    const status = commentStateLabel(t.kind);
+    const summary = t.review?.summary ? ` · ${t.review.summary.slice(0, 60)}` : "";
+    header.innerHTML = `<span>${status} · ${range}${escapeHtml(snippet)}${escapeHtml(summary)}</span>`;
+  }
+  wrap.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "thread-body";
+
+  if (t.kind === "draft") {
+    if (t.saved) {
+      const p = document.createElement("p");
+      p.textContent = t.body || "";
+      body.appendChild(p);
+    } else {
+      const composer = document.createElement("div");
+      composer.className = "thread-composer";
+      const ta = document.createElement("textarea");
+      ta.placeholder = "Leave a comment...";
+      ta.value = t.body || "";
+      ta.dataset.draft = t.id;
+      composer.appendChild(ta);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      actions.style.display = "flex";
+      actions.style.gap = "8px";
+      actions.style.padding = "6px 0 0";
+      actions.style.justifyContent = "flex-end";
+
+      const cancel = document.createElement("button");
+      cancel.className = "btn btn-ghost";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", (e) => {
+        e.preventDefault();
+        cancelDraft(t.id);
+      });
+      actions.appendChild(cancel);
+
+      const save = document.createElement("button");
+      save.className = "btn btn-primary";
+      save.textContent = "Save";
+      save.disabled = !ta.value.trim();
+      save.addEventListener("click", (e) => {
+        e.preventDefault();
+        saveDraft(t.id);
+      });
+      actions.appendChild(save);
+
+      ta.addEventListener("input", () => {
+        updateDraftBody(t.id, ta.value);
+        save.disabled = !ta.value.trim();
+      });
+      ta.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !save.disabled) {
+          e.preventDefault();
+          saveDraft(t.id);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          cancelDraft(t.id);
+        }
+      });
+
+      composer.appendChild(actions);
+      body.appendChild(composer);
+    }
+  } else {
+    const p = document.createElement("p");
+    p.textContent = t.body || "";
+    body.appendChild(p);
+    const note = t.resolutionNote || t.resolution;
+    if (note) {
+      const r = document.createElement("p");
+      r.style.marginTop = "6px";
+      r.innerHTML = `<span class="muted">Resolution:</span> ${escapeHtml(note)}`;
+      body.appendChild(r);
+    }
+    body.appendChild(buildStateActions(t));
+  }
+
+  wrap.appendChild(body);
+}
+
+function buildStateActions(t) {
+  const row = document.createElement("div");
+  row.className = "thread-actions";
+  const reviewId = t.review?.id;
+  if (!reviewId) return row;
+
+  const mkBtn = (label, nextState, title) => {
+    const b = document.createElement("button");
+    b.className = "btn btn-ghost";
+    b.style.padding = "2px 8px";
+    b.textContent = label;
+    b.title = title;
+    b.disabled = t.kind === nextState;
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      setCommentState(reviewId, t.id, nextState);
+    });
+    row.appendChild(b);
+  };
+
+  if (t.kind === "open") {
+    mkBtn("Done", "done", "Mark as addressed");
+    mkBtn("Ack", "ack", "Acknowledge, no change needed");
+    mkBtn("Resolved", "resolved", "Close the thread");
+  } else {
+    mkBtn("Reopen", "open", "Reopen this thread");
+  }
+  return row;
+}
+
+async function setCommentState(reviewId, commentId, nextState) {
+  try {
+    await fetchJSON(`/api/comments/${reviewId}/${commentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: nextState }),
+    });
+  } catch (err) {
+    alert(`Could not update comment: ${err.message}`);
+    return;
+  }
+  await loadReviews();
+  refresh();
+}
+
+// ==================== DRAFTS ====================
+
+function draftsMatchLocation(d, loc) {
+  if (d.location.kind !== loc.kind) return false;
+  if (d.location.kind === "plan") {
+    return d.location.startLine === loc.startLine && d.location.endLine === loc.endLine;
+  }
+  return (
+    d.location.file === loc.file &&
+    d.location.side === loc.side &&
+    d.location.startLine === loc.startLine &&
+    d.location.endLine === loc.endLine
+  );
+}
+
+function addDraft(location, quotedText = null) {
   const existing = store.drafts.find(
-    (d) =>
-      d.startLine === startLine &&
-      d.endLine === endLine &&
-      (d.quotedText || null) === (quotedText || null),
+    (d) => draftsMatchLocation(d, location) && (d.quotedText || null) === (quotedText || null),
   );
   if (existing) {
     focusDraft(existing.id);
@@ -296,8 +301,7 @@ function addDraft(startLine, endLine, quotedText = null) {
   }
   const draft = {
     id: `draft-${store.nextDraftId++}`,
-    startLine,
-    endLine,
+    location,
     quotedText: quotedText || null,
     body: "",
     saved: false,
@@ -357,14 +361,6 @@ function updateDraftBody(id, body) {
   updateSubmitButton();
 }
 
-function refresh() {
-  if (!store.view) return;
-  store.view.dispatch({ effects: setThreadsEffect.of(null) });
-  if (store.showingPreview) renderPreview();
-  persistDrafts();
-  updateSubmitButton();
-}
-
 function savedDrafts() {
   return store.drafts.filter((d) => d.saved && d.savedBody && d.savedBody.trim());
 }
@@ -377,14 +373,100 @@ function updateSubmitButton() {
   count.textContent = String(n);
 }
 
-async function submitReview(summary) {
-  const comments = savedDrafts().map((d) => ({
-    startLine: d.startLine,
-    endLine: d.endLine,
-    body: d.savedBody,
-    quotedText: d.quotedText || undefined,
+function refresh() {
+  if (store.mode === "plan") refreshPlan();
+  else refreshDiff();
+  persistDrafts();
+  updateSubmitButton();
+}
+
+// Identifier for persistence keys + viewed-files keys.
+function targetKey() {
+  if (!store.target) return "";
+  if (store.target.kind === "plan") return `plan:${store.target.path}`;
+  return `diff:${store.target.repoRoot}:${store.target.slug}`;
+}
+
+function draftsStorageKey() {
+  return `plan-review:v2:drafts:${targetKey()}`;
+}
+
+function persistDrafts() {
+  if (!store.target) return;
+  try {
+    localStorage.setItem(
+      draftsStorageKey(),
+      JSON.stringify({ drafts: store.drafts, nextDraftId: store.nextDraftId }),
+    );
+  } catch (err) {
+    console.warn("Could not persist drafts:", err);
+  }
+}
+
+function loadDraftsFromStorage() {
+  if (!store.target) return;
+  try {
+    const raw = localStorage.getItem(draftsStorageKey());
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.drafts)) {
+      store.drafts = data.drafts.filter(
+        (d) =>
+          d &&
+          typeof d.id === "string" &&
+          d.location &&
+          Number.isInteger(d.location.startLine) &&
+          Number.isInteger(d.location.endLine),
+      );
+    }
+    if (Number.isInteger(data.nextDraftId) && data.nextDraftId > 0) {
+      store.nextDraftId = data.nextDraftId;
+    }
+  } catch (err) {
+    console.warn("Could not restore drafts:", err);
+  }
+}
+
+async function loadReviews() {
+  const doc = await fetchJSON("/api/reviews");
+  store.reviews = (doc.reviews || []).map((r) => ({
+    ...r,
+    comments: r.comments.map(normalizeComment),
   }));
-  if (comments.length === 0) return;
+}
+
+async function loadSnapshots() {
+  try {
+    store.snapshots = await fetchJSON("/api/snapshots");
+  } catch {
+    store.snapshots = [];
+  }
+}
+
+async function submitReview(summary) {
+  const drafts = savedDrafts();
+  if (drafts.length === 0) return;
+  const comments = drafts.map((d) => {
+    if (d.location.kind === "plan") {
+      return {
+        startLine: d.location.startLine,
+        endLine: d.location.endLine,
+        body: d.savedBody,
+        quotedText: d.quotedText || undefined,
+      };
+    }
+    return {
+      location: {
+        kind: "diff",
+        file: d.location.file,
+        side: d.location.side,
+        startLine: d.location.startLine,
+        endLine: d.location.endLine,
+      },
+      body: d.savedBody,
+      quotedText: d.quotedText || undefined,
+    };
+  });
 
   try {
     await fetchJSON("/api/reviews", {
@@ -401,81 +483,151 @@ async function submitReview(summary) {
   refresh();
 }
 
+function wireSubmitDialog() {
+  const submitBtn = document.getElementById("submit-review");
+  const dialog = document.getElementById("submit-dialog");
+  const summaryLine = document.getElementById("submit-summary-line");
+  const summaryTA = document.getElementById("summary");
+
+  submitBtn.addEventListener("click", () => {
+    const n = savedDrafts().length;
+    summaryLine.textContent = `${n} saved comment${n === 1 ? "" : "s"} will be submitted.`;
+    summaryTA.value = "";
+    dialog.showModal();
+  });
+
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "confirm") {
+      submitReview(summaryTA.value.trim());
+    }
+  });
+}
+
+// ==================== PLAN MODE ====================
+
+const setThreadsEffect = StateEffect.define();
+
+const threadsField = StateField.define({
+  create: () => 0,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setThreadsEffect)) return value + 1;
+    return value;
+  },
+});
+
+const threadDecorations = EditorView.decorations.compute([threadsField], (state) => {
+  const doc = state.doc;
+  const all = [
+    ...store.drafts.map((d) => ({ ...d, kind: "draft" })),
+    ...store.reviews.flatMap((r) =>
+      r.comments
+        .filter((c) => !c.location || c.location.kind === "plan")
+        .map((c) => ({ ...c, kind: commentKind(c), review: r })),
+    ),
+  ];
+  const decos = [];
+  for (const t of all) {
+    const loc = t.location || { startLine: t.startLine, endLine: t.endLine };
+    const end = Math.min(doc.lines, Math.max(1, loc.endLine));
+    const line = doc.line(end);
+    decos.push(
+      Decoration.widget({
+        widget: new ThreadWidget(t),
+        block: true,
+        side: 1,
+      }).range(line.to),
+    );
+  }
+  decos.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
+  return Decoration.set(decos);
+});
+
+class ThreadWidget extends WidgetType {
+  constructor(thread) {
+    super();
+    this.thread = thread;
+  }
+  eq(other) {
+    return JSON.stringify(other.thread) === JSON.stringify(this.thread);
+  }
+  ignoreEvent() {
+    return false;
+  }
+  toDOM() {
+    return buildThreadDOM(this.thread);
+  }
+}
+
+class AddCommentMarker extends GutterMarker {
+  constructor(line) {
+    super();
+    this.line = line;
+  }
+  eq(other) {
+    return other.line === this.line;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-add-comment-marker";
+    el.textContent = "+";
+    el.title = "Add comment on this line (or current selection)";
+    el.dataset.line = String(this.line);
+    return el;
+  }
+}
+
+const addCommentGutter = gutter({
+  class: "cm-add-comment-gutter",
+  lineMarker(view, line) {
+    const lineNum = view.state.doc.lineAt(line.from).number;
+    return new AddCommentMarker(lineNum);
+  },
+  initialSpacer: () => new AddCommentMarker(0),
+  domEventHandlers: {
+    mousedown(view, line, event) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.classList.contains("cm-add-comment-marker")) {
+        return false;
+      }
+      event.preventDefault();
+      const clickedLine = view.state.doc.lineAt(line.from).number;
+      const sel = view.state.selection.main;
+      let startLine, endLine;
+      if (!sel.empty) {
+        startLine = view.state.doc.lineAt(sel.from).number;
+        endLine = view.state.doc.lineAt(sel.to).number;
+      } else {
+        startLine = endLine = clickedLine;
+      }
+      addDraft({ kind: "plan", startLine, endLine });
+      return true;
+    },
+  },
+});
+
+function refreshPlan() {
+  if (!store.view) return;
+  store.view.dispatch({ effects: setThreadsEffect.of(null) });
+  if (store.showingPreview) renderPreview();
+}
+
 async function loadPlan() {
   store.plan = await fetchJSON("/api/plan");
-  document.getElementById("plan-path").textContent = store.plan.path;
-}
-
-function draftsStorageKey() {
-  return `plan-review:v1:drafts:${store.plan?.path || ""}`;
-}
-
-function persistDrafts() {
-  if (!store.plan) return;
-  try {
-    localStorage.setItem(
-      draftsStorageKey(),
-      JSON.stringify({
-        drafts: store.drafts,
-        nextDraftId: store.nextDraftId,
-      }),
-    );
-  } catch (err) {
-    console.warn("Could not persist drafts:", err);
-  }
-}
-
-function loadDraftsFromStorage() {
-  if (!store.plan) return;
-  try {
-    const raw = localStorage.getItem(draftsStorageKey());
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (Array.isArray(data.drafts)) {
-      const maxLine = store.plan.lines || Infinity;
-      store.drafts = data.drafts.filter(
-        (d) =>
-          d &&
-          typeof d.id === "string" &&
-          Number.isInteger(d.startLine) &&
-          Number.isInteger(d.endLine) &&
-          d.startLine >= 1 &&
-          d.endLine <= maxLine,
-      );
-    }
-    if (Number.isInteger(data.nextDraftId) && data.nextDraftId > 0) {
-      store.nextDraftId = data.nextDraftId;
-    }
-  } catch (err) {
-    console.warn("Could not restore drafts:", err);
-  }
-}
-
-async function loadReviews() {
-  const doc = await fetchJSON("/api/reviews");
-  store.reviews = doc.reviews || [];
+  document.getElementById("target-path").textContent = store.plan.path;
 }
 
 function renderPreview() {
   const wrap = document.getElementById("preview");
-
-  // Preserve focus and scroll across re-renders
   const active = document.activeElement;
   const focusInfo =
     active && active.tagName === "TEXTAREA" && active.dataset.draft
-      ? {
-          draftId: active.dataset.draft,
-          selStart: active.selectionStart,
-          selEnd: active.selectionEnd,
-        }
+      ? { draftId: active.dataset.draft, selStart: active.selectionStart, selEnd: active.selectionEnd }
       : null;
   const scrollTop = wrap.scrollTop;
 
   wrap.innerHTML = `<div class="preview-wrap">${md.render(store.plan.content)}</div>`;
   const container = wrap.querySelector(".preview-wrap");
 
-  // markdown-it's default fence renderer applies token attrs to <code>, not <pre>.
-  // Hoist source-line attrs onto the top-level <pre> so the block is commentable.
   for (const code of container.querySelectorAll("pre > code[data-source-line]")) {
     const pre = code.parentElement;
     pre.dataset.sourceLine = code.dataset.sourceLine;
@@ -484,46 +636,38 @@ function renderPreview() {
     code.removeAttribute("data-source-end-line");
   }
 
-  // Decide which elements get a "+" affordance. For lists, skip the ul/ol
-  // wrapper and anchor on each <li> so users can comment per-item.
   const anchors = [];
   for (const block of container.children) {
     if (block.tagName === "UL" || block.tagName === "OL") {
-      for (const li of block.querySelectorAll("li[data-source-line]")) {
-        anchors.push(li);
-      }
+      for (const li of block.querySelectorAll("li[data-source-line]")) anchors.push(li);
     } else if (block.hasAttribute("data-source-line")) {
       anchors.push(block);
     }
   }
   for (const a of anchors) attachAddBtn(a);
 
-  // Insert thread widgets anchored to the most-specific block containing the
-  // comment's start line (prefers <li> over its enclosing <ul>).
   const blockList = [...container.querySelectorAll("[data-source-line]")];
   const threads = [
     ...store.drafts.map((d) => ({ ...d, kind: "draft" })),
     ...store.reviews.flatMap((r) =>
-      r.comments.map((c) => ({ ...c, kind: r.status, review: r })),
+      r.comments
+        .filter((c) => !c.location || c.location.kind === "plan")
+        .map((c) => ({ ...c, kind: commentKind(c), review: r })),
     ),
   ];
   for (const t of threads) {
-    const anchor = findPreviewAnchor(blockList, t.startLine);
+    const loc = t.location || { startLine: t.startLine, endLine: t.endLine };
+    const anchor = findPreviewAnchor(blockList, loc.startLine);
     if (!anchor) continue;
     const dom = buildThreadDOM(t);
     dom.classList.add("in-preview");
-    if (anchor.tagName === "LI") {
-      anchor.appendChild(dom);
-    } else {
-      anchor.insertAdjacentElement("afterend", dom);
-    }
+    if (anchor.tagName === "LI") anchor.appendChild(dom);
+    else anchor.insertAdjacentElement("afterend", dom);
   }
 
   wrap.scrollTop = scrollTop;
   if (focusInfo) {
-    const ta = wrap.querySelector(
-      `textarea[data-draft="${focusInfo.draftId}"]`,
-    );
+    const ta = wrap.querySelector(`textarea[data-draft="${focusInfo.draftId}"]`);
     if (ta) {
       ta.focus();
       ta.setSelectionRange(focusInfo.selStart, focusInfo.selEnd);
@@ -542,13 +686,16 @@ function attachAddBtn(el) {
   btn.dataset.endLine = el.dataset.sourceEndLine;
   btn.addEventListener("click", (e) => {
     e.preventDefault();
-    addDraft(Number(btn.dataset.startLine), Number(btn.dataset.endLine));
+    addDraft({
+      kind: "plan",
+      startLine: Number(btn.dataset.startLine),
+      endLine: Number(btn.dataset.endLine),
+    });
   });
   el.appendChild(btn);
 }
 
 function findPreviewAnchor(blockList, line) {
-  // Prefer the narrowest block whose range contains `line` (e.g. <li> over <ul>).
   let best = null;
   let bestSpan = Infinity;
   for (const b of blockList) {
@@ -591,7 +738,7 @@ function initEditor() {
   });
 }
 
-function applyView(view) {
+function applyPlanView(view) {
   const editor = document.getElementById("editor");
   const preview = document.getElementById("preview");
   const toggle = document.getElementById("toggle-view");
@@ -620,31 +767,22 @@ function writeViewToUrl(view) {
   history.replaceState(null, "", url);
 }
 
-function wireTopbar() {
+function wirePlanTopbar() {
   const toggle = document.getElementById("toggle-view");
   toggle.addEventListener("click", () => {
     const next = store.showingPreview ? "source" : "richer";
-    applyView(next);
+    applyPlanView(next);
     writeViewToUrl(next);
   });
+}
 
-  const submitBtn = document.getElementById("submit-review");
-  const dialog = document.getElementById("submit-dialog");
-  const summaryLine = document.getElementById("submit-summary-line");
-  const summaryTA = document.getElementById("summary");
-
-  submitBtn.addEventListener("click", () => {
-    const n = savedDrafts().length;
-    summaryLine.textContent = `${n} saved comment${n === 1 ? "" : "s"} will be submitted.`;
-    summaryTA.value = "";
-    dialog.showModal();
-  });
-
-  dialog.addEventListener("close", () => {
-    if (dialog.returnValue === "confirm") {
-      submitReview(summaryTA.value.trim());
-    }
-  });
+function findBlockWithSource(node) {
+  let el = node && node.nodeType === 1 ? node : node?.parentElement;
+  while (el && el !== document.body) {
+    if (el.hasAttribute && el.hasAttribute("data-source-line")) return el;
+    el = el.parentElement;
+  }
+  return null;
 }
 
 function getFloatingCommentBtn() {
@@ -659,14 +797,11 @@ function getFloatingCommentBtn() {
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const startLine = Number(btn.dataset.startLine);
-    const endLine = Number(btn.dataset.endLine);
+    const loc = JSON.parse(btn.dataset.location || "null");
     const quoted = btn.dataset.quotedText || "";
     window.getSelection()?.removeAllRanges();
     btn.style.display = "none";
-    if (Number.isInteger(startLine) && Number.isInteger(endLine)) {
-      addDraft(startLine, endLine, quoted);
-    }
+    if (loc) addDraft(loc, quoted);
   });
   document.body.appendChild(btn);
   return btn;
@@ -677,16 +812,7 @@ function hideFloatingBtn() {
   if (btn) btn.style.display = "none";
 }
 
-function findBlockWithSource(node) {
-  let el = node && node.nodeType === 1 ? node : node?.parentElement;
-  while (el && el !== document.body) {
-    if (el.hasAttribute && el.hasAttribute("data-source-line")) return el;
-    el = el.parentElement;
-  }
-  return null;
-}
-
-function wireSelectionButton() {
+function wirePlanSelectionButton() {
   const btn = getFloatingCommentBtn();
   const updater = () => {
     const sel = window.getSelection();
@@ -714,7 +840,6 @@ function wireSelectionButton() {
       hideFloatingBtn();
       return;
     }
-    // Ignore selections inside an existing thread widget
     if (ancestor.closest(".thread-widget")) {
       hideFloatingBtn();
       return;
@@ -742,23 +867,378 @@ function wireSelectionButton() {
     btn.style.display = "inline-flex";
     btn.style.left = `${rect.right + window.scrollX + 6}px`;
     btn.style.top = `${rect.top + window.scrollY - 4}px`;
-    btn.dataset.startLine = String(startLine);
-    btn.dataset.endLine = String(endLine);
+    btn.dataset.location = JSON.stringify({ kind: "plan", startLine, endLine });
     btn.dataset.quotedText = quoted;
   };
   document.addEventListener("selectionchange", updater);
   window.addEventListener("scroll", hideFloatingBtn, true);
 }
 
-async function boot() {
+async function bootPlanMode(target) {
+  store.target = target;
+  store.mode = "plan";
+  document.body.classList.add("mode-plan");
   await loadPlan();
   loadDraftsFromStorage();
   await loadReviews();
   initEditor();
-  wireTopbar();
-  wireSelectionButton();
-  applyView(viewFromUrl());
+  wirePlanTopbar();
+  wirePlanSelectionButton();
+  wireSubmitDialog();
+  applyPlanView(viewFromUrl());
   updateSubmitButton();
+}
+
+// ==================== DIFF MODE ====================
+
+function viewedStorageKey() {
+  return `plan-review:v2:viewed:${targetKey()}`;
+}
+
+function loadViewedFromStorage() {
+  try {
+    const raw = localStorage.getItem(viewedStorageKey());
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) store.viewedFiles = new Set(arr);
+  } catch {}
+}
+
+function persistViewed() {
+  try {
+    localStorage.setItem(viewedStorageKey(), JSON.stringify([...store.viewedFiles]));
+  } catch {}
+}
+
+function latestSnapshotId() {
+  return store.snapshots.length ? store.snapshots[store.snapshots.length - 1].id : null;
+}
+
+function effectiveViewMode(filePath) {
+  const set = store.fileViewMode[filePath];
+  if (set) return set;
+  return latestSnapshotId() ? "interdiff" : "full";
+}
+
+async function fetchFileDiff(filePath, mode) {
+  const snap = latestSnapshotId();
+  const from = mode === "interdiff" && snap ? `&from=${encodeURIComponent(snap)}` : "";
+  const res = await fetchJSON(`/api/diff/file?path=${encodeURIComponent(filePath)}${from}`);
+  return res;
+}
+
+function commentsForFile(file) {
+  const threads = [];
+  for (const r of store.reviews) {
+    for (const c of r.comments) {
+      if (c.location?.kind === "diff" && c.location.file === file) {
+        threads.push({ ...c, kind: commentKind(c), review: r });
+      }
+    }
+  }
+  for (const d of store.drafts) {
+    if (d.location?.kind === "diff" && d.location.file === file) {
+      threads.push({ ...d, kind: "draft" });
+    }
+  }
+  return threads;
+}
+
+function renderFileTree() {
+  const tree = document.getElementById("file-tree");
+  tree.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "file-tree-header";
+  header.textContent = `${store.files.length} file${store.files.length === 1 ? "" : "s"} changed`;
+  tree.appendChild(header);
+
+  const ul = document.createElement("ul");
+  for (const f of store.files) {
+    const li = document.createElement("li");
+    li.dataset.file = f.path;
+    if (store.viewedFiles.has(f.path)) li.classList.add("viewed");
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "viewed-toggle";
+    cb.checked = store.viewedFiles.has(f.path);
+    cb.title = "Mark as viewed";
+    cb.addEventListener("change", () => {
+      if (cb.checked) store.viewedFiles.add(f.path);
+      else store.viewedFiles.delete(f.path);
+      li.classList.toggle("viewed", cb.checked);
+      persistViewed();
+    });
+
+    const link = document.createElement("a");
+    link.className = "file-link";
+    link.href = `#file-${cssEscape(f.path)}`;
+    link.innerHTML =
+      `<span class="file-status file-status-${f.status}" title="${f.status}">${statusGlyph(f.status)}</span>` +
+      `<span class="file-path">${escapeHtml(f.path)}</span>`;
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const section = document.getElementById(`file-${f.path}`);
+      if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    li.appendChild(cb);
+    li.appendChild(link);
+
+    const badge = commentsForFile(f.path).filter((t) => t.kind !== "draft" && t.kind !== "resolved").length;
+    if (badge > 0) {
+      const b = document.createElement("span");
+      b.className = "file-comment-count";
+      b.textContent = String(badge);
+      li.appendChild(b);
+    }
+
+    ul.appendChild(li);
+  }
+  tree.appendChild(ul);
+}
+
+function statusGlyph(status) {
+  switch (status) {
+    case "added": return "A";
+    case "deleted": return "D";
+    default: return "M";
+  }
+}
+
+function cssEscape(s) {
+  return s.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+async function renderDiffPane() {
+  const pane = document.getElementById("diff-pane");
+  pane.innerHTML = "";
+
+  for (const f of store.files) {
+    const section = document.createElement("section");
+    section.className = "file-section";
+    section.id = `file-${f.path}`;
+    section.dataset.file = f.path;
+    pane.appendChild(section);
+    await renderFileSection(f, section);
+  }
+
+  insertDiffThreads();
+}
+
+async function renderFileSection(f, section) {
+  section.innerHTML = "";
+
+  const header = document.createElement("header");
+  header.className = "file-section-header";
+
+  const title = document.createElement("div");
+  title.className = "file-section-title";
+  title.innerHTML =
+    `<span class="file-status file-status-${f.status}">${statusGlyph(f.status)}</span>` +
+    `<span class="file-path">${escapeHtml(f.path)}</span>`;
+  header.appendChild(title);
+
+  if (latestSnapshotId()) {
+    header.appendChild(buildViewModeToggle(f));
+  }
+
+  section.appendChild(header);
+
+  const diffWrap = document.createElement("div");
+  diffWrap.className = "diff-table-wrap";
+  section.appendChild(diffWrap);
+
+  const mode = effectiveViewMode(f.path);
+  try {
+    const data = await fetchFileDiff(f.path, mode);
+    if (mode === "interdiff" && !data.isInterdiff) {
+      const notice = document.createElement("div");
+      notice.className = "diff-notice";
+      notice.textContent = "No snapshot for this file in the last review — showing full diff.";
+      diffWrap.appendChild(notice);
+    }
+    diffWrap.appendChild(renderSideBySideTable(f.path, data.sideBySide));
+  } catch (err) {
+    diffWrap.textContent = `Could not load diff: ${err.message}`;
+  }
+}
+
+function buildViewModeToggle(f) {
+  const wrap = document.createElement("div");
+  wrap.className = "view-mode-toggle";
+  const current = effectiveViewMode(f.path);
+
+  const latest = store.snapshots[store.snapshots.length - 1];
+  const sinceLabel = latest && latest.createdAt
+    ? `Since ${new Date(latest.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+    : "Since last review";
+
+  const interBtn = document.createElement("button");
+  interBtn.className = "btn btn-ghost";
+  interBtn.textContent = sinceLabel;
+  interBtn.dataset.mode = "interdiff";
+  if (current === "interdiff") interBtn.classList.add("active");
+  interBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    setFileViewMode(f, "interdiff");
+  });
+
+  const fullBtn = document.createElement("button");
+  fullBtn.className = "btn btn-ghost";
+  fullBtn.textContent = "Full diff";
+  fullBtn.dataset.mode = "full";
+  if (current === "full") fullBtn.classList.add("active");
+  fullBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    setFileViewMode(f, "full");
+  });
+
+  wrap.appendChild(interBtn);
+  wrap.appendChild(fullBtn);
+  return wrap;
+}
+
+async function setFileViewMode(f, mode) {
+  store.fileViewMode[f.path] = mode;
+  const section = document.getElementById(`file-${f.path}`);
+  if (!section) return;
+  await renderFileSection(f, section);
+  insertDiffThreads();
+}
+
+function renderSideBySideTable(filePath, hunks) {
+  const table = document.createElement("table");
+  table.className = "diff-table";
+  for (let i = 0; i < hunks.length; i++) {
+    if (i > 0) {
+      const tr = document.createElement("tr");
+      tr.className = "diff-gap";
+      tr.innerHTML = `<td colspan="4">…</td>`;
+      table.appendChild(tr);
+    }
+    for (const row of hunks[i].rows) {
+      const tr = document.createElement("tr");
+      tr.className = "diff-row";
+      tr.dataset.file = filePath;
+      if (row.left) tr.dataset.leftLine = String(row.left.line);
+      if (row.right) tr.dataset.rightLine = String(row.right.line);
+
+      const lnL = document.createElement("td");
+      lnL.className = "ln ln-left";
+      lnL.textContent = row.left ? String(row.left.line) : "";
+      if (row.left && row.left.kind !== " ") {
+        lnL.classList.add(`kind-${row.left.kind === "-" ? "del" : "add"}`);
+      }
+      lnL.addEventListener("click", (e) => {
+        if (!row.left) return;
+        e.preventDefault();
+        addDraft(
+          { kind: "diff", file: filePath, side: "left", startLine: row.left.line, endLine: row.left.line },
+          row.left.text,
+        );
+      });
+      tr.appendChild(lnL);
+
+      const txL = document.createElement("td");
+      txL.className = "tx tx-left";
+      if (row.left) {
+        if (row.left.kind !== " ") txL.classList.add(`kind-${row.left.kind === "-" ? "del" : "add"}`);
+        txL.textContent = row.left.text;
+      }
+      tr.appendChild(txL);
+
+      const lnR = document.createElement("td");
+      lnR.className = "ln ln-right";
+      lnR.textContent = row.right ? String(row.right.line) : "";
+      if (row.right && row.right.kind !== " ") {
+        lnR.classList.add(`kind-${row.right.kind === "-" ? "del" : "add"}`);
+      }
+      lnR.addEventListener("click", (e) => {
+        if (!row.right) return;
+        e.preventDefault();
+        addDraft(
+          { kind: "diff", file: filePath, side: "right", startLine: row.right.line, endLine: row.right.line },
+          row.right.text,
+        );
+      });
+      tr.appendChild(lnR);
+
+      const txR = document.createElement("td");
+      txR.className = "tx tx-right";
+      if (row.right) {
+        if (row.right.kind !== " ") txR.classList.add(`kind-${row.right.kind === "-" ? "del" : "add"}`);
+        txR.textContent = row.right.text;
+      }
+      tr.appendChild(txR);
+
+      table.appendChild(tr);
+    }
+  }
+  return table;
+}
+
+function insertDiffThreads() {
+  // Clear any existing thread rows first.
+  for (const tr of document.querySelectorAll(".diff-thread-row")) tr.remove();
+
+  for (const f of store.files) {
+    const threads = commentsForFile(f.path);
+    for (const t of threads) {
+      const loc = t.location;
+      const selector = `tr.diff-row[data-file="${cssAttr(f.path)}"][data-${loc.side}-line="${loc.endLine}"]`;
+      const anchor = document.querySelector(selector);
+      if (!anchor) continue;
+      const threadRow = document.createElement("tr");
+      threadRow.className = `diff-thread-row side-${loc.side}`;
+      const cell = document.createElement("td");
+      cell.colSpan = 4;
+      const dom = buildThreadDOM(t);
+      dom.classList.add("in-diff");
+      cell.appendChild(dom);
+      threadRow.appendChild(cell);
+      anchor.insertAdjacentElement("afterend", threadRow);
+    }
+  }
+}
+
+function cssAttr(s) {
+  return s.replace(/"/g, '\\"');
+}
+
+function refreshDiff() {
+  renderFileTree();
+  insertDiffThreads();
+}
+
+async function bootDiffMode(target) {
+  store.target = target;
+  store.mode = "diff";
+  store.files = target.files;
+  document.body.classList.add("mode-diff");
+  document.getElementById("editor").classList.add("hidden");
+  document.getElementById("preview").classList.add("hidden");
+  document.getElementById("diff-layout").classList.remove("hidden");
+  document.getElementById("target-path").textContent =
+    `${target.repoRoot} · ${target.base}..${target.head}`;
+
+  loadViewedFromStorage();
+  loadDraftsFromStorage();
+  await loadReviews();
+  await loadSnapshots();
+  renderFileTree();
+  await renderDiffPane();
+  wireSubmitDialog();
+  updateSubmitButton();
+}
+
+// ==================== BOOT ====================
+
+async function boot() {
+  const target = await fetchJSON("/api/target");
+  if (target.kind === "plan") return bootPlanMode(target);
+  if (target.kind === "diff") return bootDiffMode(target);
+  throw new Error(`Unknown target kind: ${target.kind}`);
 }
 
 boot().catch((err) => {

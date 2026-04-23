@@ -2,17 +2,57 @@
 const fs = require('fs');
 const path = require('path');
 const { createApp } = require('../server');
+const { planTarget, diffTarget } = require('../server/target');
+
+function usage() {
+  console.error(
+    'Usage:\n' +
+      '  plan-review plan <file.md>\n' +
+      '  plan-review diff [base] [head]\n' +
+      '      diff            → working tree vs HEAD\n' +
+      '      diff main       → main..HEAD\n' +
+      '      diff main HEAD~2 → main..HEAD~2\n' +
+      '  plan-review <file.md>   (shorthand for "plan")',
+  );
+}
+
+function parseArgs(argv) {
+  if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') {
+    return { kind: 'help' };
+  }
+  if (argv[0] === 'plan') {
+    if (!argv[1]) throw new Error('plan requires a file path');
+    return { kind: 'plan', path: argv[1] };
+  }
+  if (argv[0] === 'diff') {
+    if (argv.length === 1) return { kind: 'diff', base: 'HEAD', head: 'WORKING' };
+    if (argv.length === 2) return { kind: 'diff', base: argv[1], head: 'HEAD' };
+    return { kind: 'diff', base: argv[1], head: argv[2] };
+  }
+  return { kind: 'plan', path: argv[0] };
+}
 
 async function main() {
-  const arg = process.argv[2];
-  if (!arg || arg === '-h' || arg === '--help') {
-    console.error('Usage: plan-review <path-to-plan.md>');
-    process.exit(arg ? 0 : 1);
+  let parsed;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(err.message);
+    usage();
+    process.exit(1);
+  }
+  if (parsed.kind === 'help') {
+    usage();
+    process.exit(0);
   }
 
-  const planPath = path.resolve(arg);
-  if (!fs.existsSync(planPath) || !fs.statSync(planPath).isFile()) {
-    console.error(`File not found: ${planPath}`);
+  let target;
+  try {
+    target = parsed.kind === 'plan'
+      ? planTarget(parsed.path)
+      : diffTarget(parsed.base, parsed.head);
+  } catch (err) {
+    console.error(err.message);
     process.exit(1);
   }
 
@@ -22,11 +62,14 @@ async function main() {
     process.exit(1);
   }
 
-  const app = createApp(planPath);
+  const app = createApp(target);
   const server = app.listen(0, '127.0.0.1', async () => {
     const { port } = server.address();
     const url = `http://127.0.0.1:${port}/`;
-    console.log(`plan-review serving ${path.basename(planPath)} at ${url}`);
+    const label = target.kind === 'plan'
+      ? path.basename(target.path)
+      : `diff ${target.base}..${target.head} (${target.files.length} files)`;
+    console.log(`plan-review serving ${label} at ${url}`);
     try {
       const open = (await import('open')).default;
       await open(url);
