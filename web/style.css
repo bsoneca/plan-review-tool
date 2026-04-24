@@ -563,3 +563,37 @@ body.mode-diff .plan-only { display: none; }
 .hljs-strong { font-weight: 600; }
 .hljs-addition { color: #22863a; background: #f0fff4; }
 .hljs-deletion { color: #b31d28; background: #ffeef0; }
+
+/* ===== Scroll anchors for keyboard navigation ===== */
+.file-section { scroll-margin-top: 8px; }
+#diff-pane tr.diff-row { scroll-margin-top: 8px; }
+#diff-pane tr.diff-thread-row { scroll-margin-top: 8px; }
+
+/* ===== Shortcuts dialog ===== */
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 4px;
+}
+.shortcut-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.shortcut-table td:first-child {
+  width: 130px;
+  white-space: nowrap;
+}
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: #f6f8fa;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+  min-width: 20px;
+  text-align: center;
+}

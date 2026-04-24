@@ -1273,7 +1273,121 @@ async function bootDiffMode(target) {
   renderFileTree();
   await renderDiffPane();
   wireSubmitDialog();
+  wireDiffKeyboard();
   updateSubmitButton();
+}
+
+// ==================== DIFF KEYBOARD NAVIGATION ====================
+
+const DIFF_SCROLL_MARGIN = 16;
+
+function wireDiffKeyboard() {
+  document.addEventListener("keydown", handleDiffKey);
+}
+
+function handleDiffKey(e) {
+  if (store.mode !== "diff") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+  const dialog = document.getElementById("shortcuts-dialog");
+  if (dialog && dialog.open) return;
+
+  switch (e.key) {
+    case "j": e.preventDefault(); scrollAnchors(fileAnchors(), 1); break;
+    case "k": e.preventDefault(); scrollAnchors(fileAnchors(), -1); break;
+    case "n": e.preventDefault(); scrollAnchors(chunkAnchors(), 1); break;
+    case "p": e.preventDefault(); scrollAnchors(chunkAnchors(), -1); break;
+    case "N": e.preventDefault(); scrollAnchors(threadAnchors(), 1); break;
+    case "P": e.preventDefault(); scrollAnchors(threadAnchors(), -1); break;
+    case "v": e.preventDefault(); toggleCurrentFileViewed(); break;
+    case "?": e.preventDefault(); showShortcutsHelp(); break;
+  }
+}
+
+function fileAnchors() {
+  return [...document.querySelectorAll(".file-section")];
+}
+
+function threadAnchors() {
+  return [...document.querySelectorAll("#diff-pane .thread-widget.in-diff")];
+}
+
+function chunkAnchors() {
+  const rows = document.querySelectorAll("tr.diff-row");
+  const chunks = [];
+  let prevChanged = false;
+  for (const r of rows) {
+    const changed = !!r.querySelector(".kind-add, .kind-del");
+    if (changed && !prevChanged) chunks.push(r);
+    prevChanged = changed;
+  }
+  return chunks;
+}
+
+function scrollAnchors(anchors, direction) {
+  if (!anchors.length) return;
+  const pane = document.getElementById("diff-pane");
+  const paneTop = pane ? pane.getBoundingClientRect().top : 0;
+  if (direction === 1) {
+    for (const a of anchors) {
+      if (a.getBoundingClientRect().top > paneTop + DIFF_SCROLL_MARGIN) {
+        a.scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
+    }
+  } else {
+    for (let i = anchors.length - 1; i >= 0; i--) {
+      if (anchors[i].getBoundingClientRect().top < paneTop - DIFF_SCROLL_MARGIN) {
+        anchors[i].scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
+    }
+  }
+}
+
+function currentFileSection() {
+  const sections = [...document.querySelectorAll(".file-section")];
+  const pane = document.getElementById("diff-pane");
+  const paneTop = pane ? pane.getBoundingClientRect().top : 0;
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if (sections[i].getBoundingClientRect().top <= paneTop + 1) return sections[i];
+  }
+  return sections[0] || null;
+}
+
+function toggleCurrentFileViewed() {
+  const section = currentFileSection();
+  if (!section) return;
+  const file = section.dataset.file;
+  const cb = document.querySelector(`li[data-file="${cssAttr(file)}"] .viewed-toggle`);
+  if (cb) cb.click();
+}
+
+function showShortcutsHelp() {
+  let dialog = document.getElementById("shortcuts-dialog");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "shortcuts-dialog";
+    dialog.innerHTML = `
+      <form method="dialog">
+        <h2>Keyboard shortcuts</h2>
+        <table class="shortcut-table">
+          <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>Next / previous file</td></tr>
+          <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>Next / previous change</td></tr>
+          <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous comment</td></tr>
+          <tr><td><kbd>v</kbd></td><td>Toggle viewed on current file</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Show this dialog</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close this dialog</td></tr>
+        </table>
+        <menu>
+          <button value="close" class="btn btn-primary">Close</button>
+        </menu>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+  }
+  dialog.showModal();
 }
 
 // ==================== BOOT ====================
