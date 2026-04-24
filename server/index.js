@@ -49,7 +49,7 @@ function createApp(target) {
     if (!target.files.some((f) => f.path === filePath)) {
       return res.status(404).json({ error: 'File not part of this diff' });
     }
-    const context = Math.max(0, Math.min(100, Number(req.query.context ?? 3)));
+    const context = Math.max(0, Number(req.query.context ?? 1000000));
     const fromReviewId = req.query.from ? String(req.query.from) : null;
     try {
       if (fromReviewId) {
