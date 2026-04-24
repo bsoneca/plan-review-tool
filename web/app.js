@@ -11,6 +11,7 @@ import {
 import { defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import MarkdownIt from "markdown-it";
+import hljs from "highlight.js/lib/common";
 
 // ==================== STATE ====================
 
@@ -1006,6 +1007,50 @@ function statusGlyph(status) {
   }
 }
 
+const LANG_BY_EXT = {
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+  ts: "typescript", tsx: "typescript",
+  py: "python",
+  rb: "ruby",
+  go: "go",
+  rs: "rust",
+  java: "java",
+  kt: "kotlin", kts: "kotlin",
+  swift: "swift",
+  c: "c", h: "c",
+  cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+  cs: "csharp",
+  php: "php",
+  sh: "bash", bash: "bash", zsh: "bash",
+  md: "markdown", markdown: "markdown",
+  yml: "yaml", yaml: "yaml",
+  json: "json",
+  html: "xml", htm: "xml", xml: "xml", svg: "xml",
+  css: "css", scss: "scss", less: "less",
+  sql: "sql",
+  lua: "lua",
+  r: "r",
+  ini: "ini", toml: "ini",
+};
+
+function langForFile(filePath) {
+  const base = filePath.split("/").pop() || "";
+  const ext = base.includes(".") ? base.split(".").pop().toLowerCase() : "";
+  const lang = LANG_BY_EXT[ext];
+  if (lang && hljs.getLanguage(lang)) return lang;
+  return null;
+}
+
+function highlightText(text, lang) {
+  if (!text) return "";
+  if (!lang) return escapeHtml(text);
+  try {
+    return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+  } catch {
+    return escapeHtml(text);
+  }
+}
+
 function cssEscape(s) {
   return s.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
@@ -1109,7 +1154,8 @@ async function setFileViewMode(f, mode) {
 
 function renderSideBySideTable(filePath, hunks) {
   const table = document.createElement("table");
-  table.className = "diff-table";
+  table.className = "diff-table hljs";
+  const lang = langForFile(filePath);
   for (let i = 0; i < hunks.length; i++) {
     if (i > 0) {
       const tr = document.createElement("tr");
@@ -1144,7 +1190,7 @@ function renderSideBySideTable(filePath, hunks) {
       txL.className = "tx tx-left";
       if (row.left) {
         if (row.left.kind !== " ") txL.classList.add(`kind-${row.left.kind === "-" ? "del" : "add"}`);
-        txL.textContent = row.left.text;
+        txL.innerHTML = highlightText(row.left.text, lang);
       }
       tr.appendChild(txL);
 
@@ -1168,7 +1214,7 @@ function renderSideBySideTable(filePath, hunks) {
       txR.className = "tx tx-right";
       if (row.right) {
         if (row.right.kind !== " ") txR.classList.add(`kind-${row.right.kind === "-" ? "del" : "add"}`);
-        txR.textContent = row.right.text;
+        txR.innerHTML = highlightText(row.right.text, lang);
       }
       tr.appendChild(txR);
 
