@@ -2,7 +2,7 @@ const path = require('path');
 const express = require('express');
 const { readPlan } = require('./target');
 const { fetchDiff, fetchDiffBetween, sideBySide, fetchFileContent } = require('./diff');
-const { loadSidecar, appendReview, patchReview, patchComment } = require('./reviews');
+const { loadSidecar, appendReview, patchReview, patchComment, addReply } = require('./reviews');
 const { listSnapshots, readSnapshotFile } = require('./snapshots');
 
 function resolveContent(target, filePath, ref) {
@@ -148,6 +148,21 @@ function createApp(target) {
       const updated = patchReview(target, req.params.id, req.body || {});
       if (!updated) return res.status(404).json({ error: 'Review not found' });
       res.json(updated);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/comments/:reviewId/:commentId/replies', (req, res) => {
+    try {
+      const reply = addReply(
+        target,
+        req.params.reviewId,
+        req.params.commentId,
+        req.body || {},
+      );
+      if (!reply) return res.status(404).json({ error: 'Comment not found' });
+      res.status(201).json(reply);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

@@ -27,6 +27,19 @@ Each comment has a `state` field, one of:
 
 Missing `state` → treat as `open`. Legacy plan sidecars may have `review.status = "addressed"` to indicate the whole review was already handled — in that case treat every comment in the review as closed.
 
+## Replies (disputes, counter-proposals)
+
+Each comment may have a `replies` array; each reply has `{ id, author, body, createdAt }` where `author` is `"human"` or `"claude"`. You can **reply** to a comment when you think you have a better approach than what the reviewer suggested, or when you want to ask a clarifying question before acting.
+
+Decision tree for each open comment:
+
+1. **The suggestion is good and straightforward** → apply it. Edit the file. Set `state: "done"` and add a short `resolutionNote`.
+2. **You have a better idea, or want to push back** → append a reply with `author: "claude"` and a body that explains your counter-proposal or question. Leave `state: "open"`. This flips the attention pill back to the human.
+3. **Acknowledgement, no code change warranted** → set `state: "ack"` with a `resolutionNote` explaining why.
+4. **Genuinely infeasible** → same as #3: `ack` with a clear `resolutionNote`.
+
+The last reply's author determines whose turn it is. Don't reply just to narrate — reply only when the human needs to decide something (dispute, question, counter-proposal).
+
 ## Steps
 
 1. **Resolve the input.** Derive the sidecar path:
@@ -49,8 +62,11 @@ Missing `state` → treat as `open`. Legacy plan sidecars may have `review.statu
    4. If the comment's file has been further changed and `quotedText` no longer appears verbatim, warn the user and ask how to proceed for that comment.
    5. Present a summary of each open comment (file, side, line, quote, body) before making edits.
    6. After each successful edit, set the comment's `state` to `"done"` and write a one-sentence `resolutionNote`.
-6. **Update the sidecar JSON** using the Edit tool. Preserve all existing fields; only mutate `state` and add `resolutionNote`.
-7. **Report back** a bullet list of what changed and what remains open (if anything).
+6. **Update the sidecar JSON** using the Edit tool:
+   - For applied comments: set `state: "done"` and add `resolutionNote`.
+   - For acknowledged comments: set `state: "ack"` and add `resolutionNote`.
+   - For disputes/counter-proposals: append to the comment's `replies` array an object `{ id: "rep_<timestamp>_<rand>", author: "claude", body: "...", createdAt: "<ISO-8601>" }`, keep `state: "open"`, and do **not** edit the file yet. Generate `id` in the same shape as existing ids — e.g. `rep_2026-04-24T02-30-00-000Z_abcd`. Never mutate existing replies.
+7. **Report back** a bullet list of what changed, what you disputed (with one-line rationale), and what remains open.
 
 ## Rules
 

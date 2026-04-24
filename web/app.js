@@ -226,10 +226,126 @@ function populateThreadDOM(wrap, t) {
       r.innerHTML = `<span class="muted">Resolution:</span> ${escapeHtml(note)}`;
       body.appendChild(r);
     }
+    body.appendChild(buildRepliesList(t));
+    body.appendChild(buildReplyComposer(t));
     body.appendChild(buildStateActions(t));
   }
 
   wrap.appendChild(body);
+}
+
+function buildRepliesList(t) {
+  const wrap = document.createElement("div");
+  wrap.className = "replies-list";
+  const replies = Array.isArray(t.replies) ? t.replies : [];
+  if (replies.length === 0) return wrap;
+  for (const rep of replies) {
+    const el = document.createElement("div");
+    el.className = `reply reply-${rep.author || "unknown"}`;
+    const header = document.createElement("div");
+    header.className = "reply-header";
+    const when = rep.createdAt
+      ? new Date(rep.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "";
+    header.innerHTML = `<span class="reply-author">${escapeHtml(rep.author || "")}</span><span class="muted">${escapeHtml(when)}</span>`;
+    el.appendChild(header);
+    const body = document.createElement("div");
+    body.className = "reply-body";
+    body.textContent = rep.body || "";
+    el.appendChild(body);
+    wrap.appendChild(el);
+  }
+  return wrap;
+}
+
+function buildReplyComposer(t) {
+  const wrap = document.createElement("div");
+  wrap.className = "reply-composer-wrap";
+  if (!t.review?.id) return wrap;
+
+  const toggle = document.createElement("button");
+  toggle.className = "btn btn-ghost reply-toggle";
+  toggle.textContent = "Reply";
+  toggle.style.padding = "2px 10px";
+  wrap.appendChild(toggle);
+
+  const composer = document.createElement("div");
+  composer.className = "reply-composer hidden";
+
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Reply...";
+  composer.appendChild(ta);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  actions.style.display = "flex";
+  actions.style.gap = "8px";
+  actions.style.padding = "6px 0 0";
+  actions.style.justifyContent = "flex-end";
+
+  const cancel = document.createElement("button");
+  cancel.className = "btn btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", (e) => {
+    e.preventDefault();
+    ta.value = "";
+    composer.classList.add("hidden");
+    toggle.classList.remove("hidden");
+  });
+
+  const send = document.createElement("button");
+  send.className = "btn btn-primary";
+  send.textContent = "Send";
+  send.disabled = true;
+  send.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const body = ta.value.trim();
+    if (!body) return;
+    send.disabled = true;
+    try {
+      await fetchJSON(`/api/comments/${t.review.id}/${t.id}/replies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ author: "human", body }),
+      });
+    } catch (err) {
+      alert(`Reply failed: ${err.message}`);
+      send.disabled = false;
+      return;
+    }
+    ta.value = "";
+    composer.classList.add("hidden");
+    toggle.classList.remove("hidden");
+    await loadReviews();
+    refresh();
+  });
+
+  ta.addEventListener("input", () => {
+    send.disabled = !ta.value.trim();
+  });
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !send.disabled) {
+      e.preventDefault();
+      send.click();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel.click();
+    }
+  });
+
+  actions.appendChild(cancel);
+  actions.appendChild(send);
+  composer.appendChild(actions);
+  wrap.appendChild(composer);
+
+  toggle.addEventListener("click", (e) => {
+    e.preventDefault();
+    composer.classList.remove("hidden");
+    toggle.classList.add("hidden");
+    setTimeout(() => ta.focus(), 0);
+  });
+
+  return wrap;
 }
 
 function buildStateActions(t) {
@@ -437,21 +553,34 @@ async function loadReviews() {
   renderAttentionPill();
 }
 
+function lastActorOnComment(c) {
+  const replies = Array.isArray(c.replies) ? c.replies : [];
+  if (replies.length > 0) return replies[replies.length - 1].author || "human";
+  return "human";
+}
+
 function renderAttentionPill() {
   const el = document.getElementById("attention-pill");
   if (!el) return;
-  const hasOpen = store.reviews.some((r) =>
-    r.comments.some((c) => (c.state || "open") === "open"),
+  const openComments = store.reviews.flatMap((r) =>
+    r.comments.filter((c) => (c.state || "open") === "open"),
   );
   el.classList.remove("hidden", "turn-claude", "turn-you");
-  if (hasOpen) {
-    el.classList.add("turn-claude");
-    el.textContent = "Claude's turn";
-    el.title = "Open comments are waiting for /apply-review";
-  } else {
+  if (openComments.length === 0) {
     el.classList.add("turn-you");
     el.textContent = "Your turn";
     el.title = "All comments closed. Leave more, or submit another review round.";
+    return;
+  }
+  const awaitingClaude = openComments.some((c) => lastActorOnComment(c) === "human");
+  if (awaitingClaude) {
+    el.classList.add("turn-claude");
+    el.textContent = "Claude's turn";
+    el.title = "Open comments are waiting on Claude (apply or reply).";
+  } else {
+    el.classList.add("turn-you");
+    el.textContent = "Your turn";
+    el.title = "Claude has replied on open comments — review and respond.";
   }
 }
 

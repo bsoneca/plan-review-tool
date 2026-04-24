@@ -172,6 +172,32 @@ function patchReview(target, id, patch) {
   return doc.reviews[idx];
 }
 
+function addReply(target, reviewId, commentId, { author, body }) {
+  const doc = loadSidecar(target);
+  const review = doc.reviews.find((r) => r.id === reviewId);
+  if (!review) return null;
+  const comment = review.comments.find((c) => c.id === commentId);
+  if (!comment) return null;
+
+  if (author !== 'human' && author !== 'claude') {
+    throw new Error('author must be "human" or "claude"');
+  }
+  if (typeof body !== 'string' || !body.trim()) {
+    throw new Error('Reply body is required');
+  }
+
+  if (!Array.isArray(comment.replies)) comment.replies = [];
+  const reply = {
+    id: newId('rep'),
+    author,
+    body: body.trim(),
+    createdAt: new Date().toISOString(),
+  };
+  comment.replies.push(reply);
+  saveSidecar(target, doc);
+  return reply;
+}
+
 function patchComment(target, reviewId, commentId, patch) {
   const doc = loadSidecar(target);
   const review = doc.reviews.find((r) => r.id === reviewId);
@@ -200,4 +226,4 @@ function patchComment(target, reviewId, commentId, patch) {
   return comment;
 }
 
-module.exports = { loadSidecar, appendReview, patchReview, patchComment };
+module.exports = { loadSidecar, appendReview, patchReview, patchComment, addReply };
