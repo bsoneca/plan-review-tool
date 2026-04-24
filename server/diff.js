@@ -100,6 +100,41 @@ function fetchDiff(target, filePath, contextLines = 3) {
   return parseUnifiedDiff(out);
 }
 
+function fetchDiffBetween(target, filePath, fromContent, toContent, contextLines = 3) {
+  const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'plan-review-diff-'));
+  const leftPath = path.join(tmpDir, 'from');
+  const rightPath = path.join(tmpDir, 'to');
+  fs.writeFileSync(leftPath, fromContent || '');
+  fs.writeFileSync(rightPath, toContent || '');
+  try {
+    const args = [
+      'diff',
+      '--no-color',
+      '--no-index',
+      `--unified=${contextLines}`,
+      leftPath,
+      rightPath,
+    ];
+    let out;
+    try {
+      out = execFileSync('git', args, {
+        cwd: target.repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 32 * 1024 * 1024,
+      });
+    } catch (err) {
+      if (err.status === 1 && typeof err.stdout === 'string') out = err.stdout;
+      else throw err;
+    }
+    return parseUnifiedDiff(out);
+  } finally {
+    try { fs.unlinkSync(leftPath); } catch {}
+    try { fs.unlinkSync(rightPath); } catch {}
+    try { fs.rmdirSync(tmpDir); } catch {}
+  }
+}
+
 function fetchFileContent(target, filePath, side) {
   const { repoRoot, base, head } = target;
   if (side === 'left') {
@@ -123,4 +158,4 @@ function fetchFileContent(target, filePath, side) {
   }
 }
 
-module.exports = { fetchDiff, sideBySide, fetchFileContent, parseUnifiedDiff };
+module.exports = { fetchDiff, fetchDiffBetween, sideBySide, fetchFileContent, parseUnifiedDiff };

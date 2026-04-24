@@ -29,7 +29,7 @@ const store = {
   files: [],
   viewedFiles: new Set(),
   snapshots: [],
-  fileViewMode: {},
+  fileCompareRange: {},
 };
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -434,6 +434,25 @@ async function loadReviews() {
     ...r,
     comments: r.comments.map(normalizeComment),
   }));
+  renderAttentionPill();
+}
+
+function renderAttentionPill() {
+  const el = document.getElementById("attention-pill");
+  if (!el) return;
+  const hasOpen = store.reviews.some((r) =>
+    r.comments.some((c) => (c.state || "open") === "open"),
+  );
+  el.classList.remove("hidden", "turn-claude", "turn-you");
+  if (hasOpen) {
+    el.classList.add("turn-claude");
+    el.textContent = "Claude's turn";
+    el.title = "Open comments are waiting for /apply-review";
+  } else {
+    el.classList.add("turn-you");
+    el.textContent = "Your turn";
+    el.title = "All comments closed. Leave more, or submit another review round.";
+  }
 }
 
 async function loadSnapshots() {
@@ -911,19 +930,42 @@ function persistViewed() {
   } catch {}
 }
 
-function latestSnapshotId() {
-  return store.snapshots.length ? store.snapshots[store.snapshots.length - 1].id : null;
+function snapshotPills() {
+  const pills = [{ ref: "BASE", label: "Base", kind: "base" }];
+  for (const s of store.snapshots) {
+    pills.push({
+      ref: s.id,
+      label: s.createdAt
+        ? new Date(s.createdAt).toLocaleString([], {
+            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+          })
+        : s.id.slice(0, 10),
+      kind: "snapshot",
+    });
+  }
+  pills.push({ ref: "CURRENT", label: "Current", kind: "current" });
+  return pills;
 }
 
-function effectiveViewMode(filePath) {
-  return store.fileViewMode[filePath] || "full";
+function getCompareRange(filePath) {
+  const pills = snapshotPills();
+  const existing = store.fileCompareRange[filePath];
+  if (existing && existing.from >= 0 && existing.to < pills.length && existing.from < existing.to) {
+    return existing;
+  }
+  return { from: 0, to: pills.length - 1 };
 }
 
-async function fetchFileDiff(filePath, mode) {
-  const snap = latestSnapshotId();
-  const from = mode === "interdiff" && snap ? `&from=${encodeURIComponent(snap)}` : "";
-  const res = await fetchJSON(`/api/diff/file?path=${encodeURIComponent(filePath)}${from}`);
-  return res;
+function setCompareRange(filePath, range) {
+  store.fileCompareRange[filePath] = range;
+}
+
+async function fetchFileDiff(filePath, range) {
+  const pills = snapshotPills();
+  const fromRef = pills[range.from]?.ref || "BASE";
+  const toRef = pills[range.to]?.ref || "CURRENT";
+  const qs = `path=${encodeURIComponent(filePath)}&from=${encodeURIComponent(fromRef)}&to=${encodeURIComponent(toRef)}`;
+  return fetchJSON(`/api/diff/file?${qs}`);
 }
 
 function commentsForFile(file) {
@@ -948,25 +990,33 @@ function renderFileTree() {
   tree.innerHTML = "";
   const header = document.createElement("div");
   header.className = "file-tree-header";
-  header.textContent = `${store.files.length} file${store.files.length === 1 ? "" : "s"} changed`;
+  const viewed = store.files.filter((f) => store.viewedFiles.has(f.path)).length;
+  header.textContent = `${viewed} / ${store.files.length} reviewed`;
   tree.appendChild(header);
 
+  const sorted = [...store.files.entries()].sort(([ai, a], [bi, b]) => {
+    const av = store.viewedFiles.has(a.path) ? 1 : 0;
+    const bv = store.viewedFiles.has(b.path) ? 1 : 0;
+    if (av !== bv) return av - bv;
+    return ai - bi;
+  });
+
   const ul = document.createElement("ul");
-  for (const f of store.files) {
+  for (const [, f] of sorted) {
     const li = document.createElement("li");
     li.dataset.file = f.path;
-    if (store.viewedFiles.has(f.path)) li.classList.add("viewed");
+    const isViewed = store.viewedFiles.has(f.path);
+    if (isViewed) li.classList.add("viewed");
 
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.className = "viewed-toggle";
-    cb.checked = store.viewedFiles.has(f.path);
-    cb.title = "Mark as viewed";
-    cb.addEventListener("change", () => {
-      if (cb.checked) store.viewedFiles.add(f.path);
-      else store.viewedFiles.delete(f.path);
-      li.classList.toggle("viewed", cb.checked);
-      persistViewed();
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "viewed-toggle";
+    toggle.setAttribute("aria-pressed", String(isViewed));
+    toggle.title = isViewed ? "Mark unreviewed" : "Mark reviewed";
+    toggle.innerHTML = isViewed ? "✓" : "";
+    toggle.addEventListener("click", (e) => {
+      e.preventDefault();
+      toggleViewed(f.path);
     });
 
     const link = document.createElement("a");
@@ -981,7 +1031,7 @@ function renderFileTree() {
       if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
     });
 
-    li.appendChild(cb);
+    li.appendChild(toggle);
     li.appendChild(link);
 
     const badge = commentsForFile(f.path).filter((t) => t.kind !== "draft" && t.kind !== "resolved").length;
@@ -995,6 +1045,13 @@ function renderFileTree() {
     ul.appendChild(li);
   }
   tree.appendChild(ul);
+}
+
+function toggleViewed(filePath) {
+  if (store.viewedFiles.has(filePath)) store.viewedFiles.delete(filePath);
+  else store.viewedFiles.add(filePath);
+  persistViewed();
+  renderFileTree();
 }
 
 function statusGlyph(status) {
@@ -1082,8 +1139,8 @@ async function renderFileSection(f, section) {
     `<span class="file-path">${escapeHtml(f.path)}</span>`;
   header.appendChild(title);
 
-  if (latestSnapshotId()) {
-    header.appendChild(buildViewModeToggle(f));
+  if (store.snapshots.length > 0) {
+    header.appendChild(buildSnapshotPicker(f));
   }
 
   section.appendChild(header);
@@ -1092,58 +1149,70 @@ async function renderFileSection(f, section) {
   diffWrap.className = "diff-table-wrap";
   section.appendChild(diffWrap);
 
-  const mode = effectiveViewMode(f.path);
+  const range = getCompareRange(f.path);
   try {
-    const data = await fetchFileDiff(f.path, mode);
-    if (mode === "interdiff" && !data.isInterdiff) {
-      const notice = document.createElement("div");
-      notice.className = "diff-notice";
-      notice.textContent = "No snapshot for this file in the last review — showing full diff.";
-      diffWrap.appendChild(notice);
-    }
+    const data = await fetchFileDiff(f.path, range);
     diffWrap.appendChild(renderSideBySideTable(f.path, data.sideBySide));
   } catch (err) {
     diffWrap.textContent = `Could not load diff: ${err.message}`;
   }
 }
 
-function buildViewModeToggle(f) {
+function buildSnapshotPicker(f) {
+  const pills = snapshotPills();
+  const range = getCompareRange(f.path);
   const wrap = document.createElement("div");
-  wrap.className = "view-mode-toggle";
-  const current = effectiveViewMode(f.path);
+  wrap.className = "snapshot-picker";
+  wrap.title = "Click to set To; Shift-click to set From";
 
-  const latest = store.snapshots[store.snapshots.length - 1];
-  const sinceLabel = latest && latest.createdAt
-    ? `Since ${new Date(latest.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-    : "Since last review";
-
-  const interBtn = document.createElement("button");
-  interBtn.className = "btn btn-ghost";
-  interBtn.textContent = sinceLabel;
-  interBtn.dataset.mode = "interdiff";
-  if (current === "interdiff") interBtn.classList.add("active");
-  interBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    setFileViewMode(f, "interdiff");
+  pills.forEach((pill, i) => {
+    const b = document.createElement("button");
+    b.className = "snap-pill";
+    b.dataset.ref = pill.ref;
+    b.dataset.kind = pill.kind;
+    b.textContent = pill.label;
+    if (i === range.from) b.classList.add("selected-from");
+    if (i === range.to) b.classList.add("selected-to");
+    if (i > range.from && i < range.to) b.classList.add("in-range");
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (e.shiftKey) shiftClickPill(f, i);
+      else clickPill(f, i);
+    });
+    wrap.appendChild(b);
   });
 
-  const fullBtn = document.createElement("button");
-  fullBtn.className = "btn btn-ghost";
-  fullBtn.textContent = "Full diff";
-  fullBtn.dataset.mode = "full";
-  if (current === "full") fullBtn.classList.add("active");
-  fullBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    setFileViewMode(f, "full");
-  });
-
-  wrap.appendChild(interBtn);
-  wrap.appendChild(fullBtn);
   return wrap;
 }
 
-async function setFileViewMode(f, mode) {
-  store.fileViewMode[f.path] = mode;
+function clickPill(f, i) {
+  const pills = snapshotPills();
+  const range = { ...getCompareRange(f.path) };
+  if (i === range.from || i === range.to) return;
+  if (i < range.from) range.from = i;
+  else if (i > range.to) range.to = i;
+  else {
+    const distFrom = i - range.from;
+    const distTo = range.to - i;
+    if (distFrom < distTo) range.from = i;
+    else range.to = i;
+  }
+  if (range.from >= range.to) return;
+  setCompareRange(f.path, range);
+  rerenderFileSection(f);
+}
+
+function shiftClickPill(f, i) {
+  const pills = snapshotPills();
+  const range = { ...getCompareRange(f.path) };
+  if (i >= range.to) range.to = Math.min(pills.length - 1, i + 1);
+  range.from = i;
+  if (range.from >= range.to) return;
+  setCompareRange(f.path, range);
+  rerenderFileSection(f);
+}
+
+async function rerenderFileSection(f) {
   const section = document.getElementById(`file-${f.path}`);
   if (!section) return;
   await renderFileSection(f, section);
@@ -1300,7 +1369,8 @@ function handleDiffKey(e) {
     case "p": e.preventDefault(); scrollAnchors(chunkAnchors(), -1); break;
     case "N": e.preventDefault(); scrollAnchors(threadAnchors(), 1); break;
     case "P": e.preventDefault(); scrollAnchors(threadAnchors(), -1); break;
-    case "v": e.preventDefault(); toggleCurrentFileViewed(); break;
+    case "v":
+    case "r": e.preventDefault(); toggleCurrentFileViewed(); break;
     case "?": e.preventDefault(); showShortcutsHelp(); break;
   }
 }
@@ -1359,9 +1429,7 @@ function currentFileSection() {
 function toggleCurrentFileViewed() {
   const section = currentFileSection();
   if (!section) return;
-  const file = section.dataset.file;
-  const cb = document.querySelector(`li[data-file="${cssAttr(file)}"] .viewed-toggle`);
-  if (cb) cb.click();
+  toggleViewed(section.dataset.file);
 }
 
 function showShortcutsHelp() {
@@ -1376,7 +1444,7 @@ function showShortcutsHelp() {
           <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>Next / previous file</td></tr>
           <tr><td><kbd>n</kbd> / <kbd>p</kbd></td><td>Next / previous change</td></tr>
           <tr><td><kbd>N</kbd> / <kbd>P</kbd></td><td>Next / previous comment</td></tr>
-          <tr><td><kbd>v</kbd></td><td>Toggle viewed on current file</td></tr>
+          <tr><td><kbd>v</kbd> / <kbd>r</kbd></td><td>Toggle reviewed on current file</td></tr>
           <tr><td><kbd>?</kbd></td><td>Show this dialog</td></tr>
           <tr><td><kbd>Esc</kbd></td><td>Close this dialog</td></tr>
         </table>

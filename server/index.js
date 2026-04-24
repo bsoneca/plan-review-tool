@@ -1,9 +1,15 @@
 const path = require('path');
 const express = require('express');
 const { readPlan } = require('./target');
-const { fetchDiff, sideBySide, fetchFileContent } = require('./diff');
+const { fetchDiff, fetchDiffBetween, sideBySide, fetchFileContent } = require('./diff');
 const { loadSidecar, appendReview, patchReview, patchComment } = require('./reviews');
-const { listSnapshots, fetchInterdiff } = require('./snapshots');
+const { listSnapshots, readSnapshotFile } = require('./snapshots');
+
+function resolveContent(target, filePath, ref) {
+  if (!ref || ref === 'BASE') return fetchFileContent(target, filePath, 'left');
+  if (ref === 'CURRENT') return fetchFileContent(target, filePath, 'right');
+  return readSnapshotFile(target, ref, filePath);
+}
 
 function createApp(target) {
   const app = express();
@@ -50,22 +56,36 @@ function createApp(target) {
       return res.status(404).json({ error: 'File not part of this diff' });
     }
     const context = Math.max(0, Number(req.query.context ?? 1000000));
-    const fromReviewId = req.query.from ? String(req.query.from) : null;
+    const fromRef = req.query.from ? String(req.query.from) : 'BASE';
+    const toRef = req.query.to ? String(req.query.to) : 'CURRENT';
     try {
-      if (fromReviewId) {
-        const inter = fetchInterdiff(target, filePath, fromReviewId, context);
-        if (inter.isInterdiff) {
-          return res.json({
-            path: filePath,
-            isInterdiff: true,
-            hunks: inter.hunks,
-            sideBySide: inter.sideBySide,
-          });
-        }
-        // fall through to full diff
+      // Fast path: BASE → CURRENT uses git's native base..head diff.
+      if (fromRef === 'BASE' && toRef === 'CURRENT') {
+        const hunks = fetchDiff(target, filePath, context);
+        return res.json({
+          path: filePath,
+          from: fromRef,
+          to: toRef,
+          hunks,
+          sideBySide: sideBySide(hunks),
+        });
       }
-      const hunks = fetchDiff(target, filePath, context);
-      res.json({ path: filePath, isInterdiff: false, hunks, sideBySide: sideBySide(hunks) });
+      const fromContent = resolveContent(target, filePath, fromRef);
+      const toContent = resolveContent(target, filePath, toRef);
+      const hunks = fetchDiffBetween(
+        target,
+        filePath,
+        fromContent || '',
+        toContent || '',
+        context,
+      );
+      res.json({
+        path: filePath,
+        from: fromRef,
+        to: toRef,
+        hunks,
+        sideBySide: sideBySide(hunks),
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
