@@ -916,9 +916,7 @@ function latestSnapshotId() {
 }
 
 function effectiveViewMode(filePath) {
-  const set = store.fileViewMode[filePath];
-  if (set) return set;
-  return latestSnapshotId() ? "interdiff" : "full";
+  return store.fileViewMode[filePath] || "full";
 }
 
 async function fetchFileDiff(filePath, mode) {
