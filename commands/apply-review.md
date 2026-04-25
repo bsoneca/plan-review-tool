@@ -24,6 +24,7 @@ Each comment has a `state` field, one of:
 - `done` — you already applied it.
 - `ack` — acknowledged, no code change needed.
 - `resolved` — reviewer closed the thread.
+- `lgtm` — reviewer stamped approval ("looks good to me"); treat as closed.
 
 Missing `state` → treat as `open`. Legacy plan sidecars may have `review.status = "addressed"` to indicate the whole review was already handled — in that case treat every comment in the review as closed.
 
@@ -72,6 +73,6 @@ The last reply's author determines whose turn it is. Don't reply just to narrate
 
 - Never delete a comment or review from the sidecar.
 - Never modify `id`, `createdAt`, `planSha`, `baseSha`, `headSha`, `body`, `quotedText`, `startLine`, `endLine`, `location`.
-- Do not touch comments already in state `done`, `ack`, or `resolved` — they're closed.
+- Do not touch comments already in state `done`, `ack`, `resolved`, or `lgtm` — they're closed.
 - For diff sidecars with `head: "WORKING"`, the "new" side is the live working tree; edits you make show up in the next review round.
 - If drift has rendered multiple quotes un-locatable, stop and ask the user how to proceed instead of guessing.

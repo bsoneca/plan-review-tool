@@ -13,6 +13,8 @@
   --done-bg: #dafbe1;
   --ack-bg: #fff1e5;
   --resolved-bg: #eef1f4;
+  --lgtm-bg: #e6f4ea;
+  --lgtm-accent: #1e8e3e;
   --code-bg: #f6f8fa;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -119,6 +121,82 @@ main { flex: 1; overflow: auto; }
 .thread-widget.ack { background: var(--ack-bg); }
 .thread-widget.resolved { background: var(--resolved-bg); }
 .thread-widget.addressed { background: var(--addressed-bg); }
+.thread-widget.lgtm {
+  background: var(--lgtm-bg);
+  border-color: var(--lgtm-accent);
+  position: relative;
+}
+.thread-widget.lgtm:not(.collapsed)::after {
+  content: "LGTM";
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--lgtm-accent);
+  border: 2px solid var(--lgtm-accent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  transform: rotate(-6deg);
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.thread-widget.lgtm.collapsed { padding: 0; }
+.thread-collapsed-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+.thread-collapsed-bar:hover { background: rgba(30, 142, 62, 0.08); }
+.thread-collapsed-bar .lgtm-chip {
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--lgtm-accent);
+  border: 1.5px solid var(--lgtm-accent);
+  padding: 0 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.6);
+}
+.thread-collapsed-bar .expand-hint {
+  margin-left: auto;
+  color: var(--lgtm-accent);
+  font-weight: 700;
+}
+
+/* Googly LGTM button — rainbow-ish Google palette on hover */
+.btn-lgtm {
+  border-color: var(--lgtm-accent) !important;
+  color: var(--lgtm-accent) !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.btn-lgtm:hover {
+  background: linear-gradient(
+    90deg,
+    #4285f4 0%,   /* G-blue */
+    #ea4335 25%,  /* G-red */
+    #fbbc05 50%,  /* G-yellow */
+    #34a853 75%,  /* G-green */
+    #4285f4 100%
+  );
+  color: #ffffff !important;
+  border-color: transparent !important;
+  background-size: 200% 100%;
+  animation: lgtm-shimmer 1.6s linear infinite;
+}
+@keyframes lgtm-shimmer {
+  from { background-position: 0% 0%; }
+  to { background-position: 200% 0%; }
+}
 
 .thread-actions {
   display: flex;

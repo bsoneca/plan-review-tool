@@ -5,7 +5,7 @@ const { readPlan } = require('./target');
 const { fetchFileContent } = require('./diff');
 const { writeSnapshot } = require('./snapshots');
 
-const COMMENT_STATES = new Set(['open', 'done', 'ack', 'resolved']);
+const COMMENT_STATES = new Set(['open', 'done', 'ack', 'resolved', 'lgtm']);
 
 function emptyShape(target) {
   if (target.kind === 'plan') {

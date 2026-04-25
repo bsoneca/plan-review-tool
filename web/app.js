@@ -30,6 +30,8 @@ const store = {
   viewedFiles: new Set(),
   snapshots: [],
   fileCompareRange: {},
+  // thread UI
+  expandedLgtm: new Set(),
 };
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -77,6 +79,7 @@ function commentStateLabel(state) {
     case "done": return "Done";
     case "ack": return "Ack";
     case "resolved": return "Resolved";
+    case "lgtm": return "LGTM";
     case "addressed": return "Addressed";
     default: return "Open";
   }
@@ -102,9 +105,14 @@ function locRangeLabel(loc) {
 
 // ==================== THREAD DOM ====================
 
+function isLgtmCollapsed(t) {
+  return t.kind === "lgtm" && !store.expandedLgtm.has(t.id);
+}
+
 function buildThreadDOM(t) {
   const wrap = document.createElement("div");
   wrap.className = `thread-widget ${t.kind}`;
+  if (isLgtmCollapsed(t)) wrap.classList.add("collapsed");
   for (const ev of ["mousedown", "mouseup", "click", "keydown", "keyup", "input", "focusin"]) {
     wrap.addEventListener(ev, (e) => e.stopPropagation());
   }
@@ -112,7 +120,32 @@ function buildThreadDOM(t) {
   return wrap;
 }
 
+function toggleLgtmExpanded(commentId) {
+  if (store.expandedLgtm.has(commentId)) store.expandedLgtm.delete(commentId);
+  else store.expandedLgtm.add(commentId);
+  refresh();
+}
+
 function populateThreadDOM(wrap, t) {
+  if (isLgtmCollapsed(t)) {
+    const bar = document.createElement("div");
+    bar.className = "thread-collapsed-bar";
+    bar.title = "Click to expand";
+    const snippet = t.quotedText
+      ? ` · "${t.quotedText.replace(/\s+/g, " ").slice(0, 50)}${t.quotedText.length > 50 ? "…" : ""}"`
+      : "";
+    bar.innerHTML =
+      `<span class="lgtm-chip">LGTM</span>` +
+      `<span class="muted">${escapeHtml(locRangeLabel(t.location))}${escapeHtml(snippet)}</span>` +
+      `<span class="expand-hint">▾</span>`;
+    bar.addEventListener("click", (e) => {
+      e.preventDefault();
+      toggleLgtmExpanded(t.id);
+    });
+    wrap.appendChild(bar);
+    return;
+  }
+
   const header = document.createElement("div");
   header.className = "thread-header";
   const range = locRangeLabel(t.location);
@@ -369,12 +402,28 @@ function buildStateActions(t) {
   };
 
   if (t.kind === "open") {
+    mkBtn("LGTM", "lgtm", "Looks good to me — stamp this thread");
     mkBtn("Done", "done", "Mark as addressed");
     mkBtn("Ack", "ack", "Acknowledge, no change needed");
-    mkBtn("Resolved", "resolved", "Close the thread");
   } else {
     mkBtn("Reopen", "open", "Reopen this thread");
   }
+
+  if (t.kind === "lgtm") {
+    const collapse = document.createElement("button");
+    collapse.className = "btn btn-ghost";
+    collapse.style.padding = "2px 8px";
+    collapse.textContent = "Collapse";
+    collapse.title = "Collapse this LGTM thread";
+    collapse.addEventListener("click", (e) => {
+      e.preventDefault();
+      toggleLgtmExpanded(t.id);
+    });
+    row.appendChild(collapse);
+  }
+
+  const lgtm = row.querySelector('button[title^="Looks good"]');
+  if (lgtm) lgtm.classList.add("btn-lgtm");
   return row;
 }
 
