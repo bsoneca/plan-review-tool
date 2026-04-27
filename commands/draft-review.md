@@ -1,6 +1,6 @@
 ---
 description: Do an automated code-review pass and annotate findings as inline comments in the plan-review sidecar.
-argument-hint: [base-ref] | working
+argument-hint: [--codex] [base-ref] | working
 ---
 
 You are doing an automated code-review pass. **The output is structured inline comments in a plan-review sidecar JSON file** — not a free-text report. The human will open the result in the plan-review browser tool, accept what's useful, push back on what's not (Claude can reply on those threads later via `/apply-review`).
@@ -9,7 +9,13 @@ This skill is intentionally separate from `/review`, `/code-review`, and `/secur
 
 ## Scope (parsing `$ARGUMENTS`)
 
-| Argument | Target |
+Strip any token starting with `--` from `$ARGUMENTS` before parsing the target — those are flags. Recognized flags:
+
+- `--codex` — delegate the analysis to the `codex` CLI (OpenAI) instead of doing it yourself. See "Codex mode" below.
+
+The remaining tokens determine the diff target:
+
+| Args (after flags) | Target |
 |---|---|
 | empty | working tree vs `HEAD` |
 | `working` | working tree vs `HEAD` (explicit) |
@@ -95,6 +101,23 @@ Confirm with the user before proceeding if the diff touches more than 20 files.
    - File-by-file count of comments left.
    - One-line summary of the most important findings (≤3).
    - The exact command to open it: `/open-review diff` or `/open-review diff <base>` or `/open-review diff <base> <head>`.
+
+## Codex mode
+
+When `--codex` is in `$ARGUMENTS`, you are not the reviewer — Codex is. Steps 4–7 above (find issues, build comments, write sidecar) are delegated to the `codex` CLI; you orchestrate and verify.
+
+1. **Check Codex is installed.** `which codex`. If missing, tell the user to install it (`npm install -g @openai/codex` or current path) and stop.
+2. **Build the prompt.** Take the contents of *this* file (without the YAML frontmatter and without this Codex section), and append:
+   > Operate on the target derived from these arguments: `<the user's $ARGUMENTS minus --codex>`. Treat the current working directory as the repo root. Write the sidecar JSON yourself; do not print findings as text.
+3. **Invoke Codex** non-interactively from the repo root:
+   ```
+   cd "$(git rev-parse --show-toplevel)" && codex exec "<prompt>"
+   ```
+   Run via Bash. Capture stdout/stderr.
+4. **Verify** the sidecar afterwards: it parses as JSON, `target.kind === "diff"`, the new review object exists in `reviews[]`, and each new comment has `id`, `location`, `body`, `quotedText`, `state: "open"`. If anything is malformed, surface Codex's output and ask the user how to proceed — **do not silently retry** and do not "fix" Codex's findings yourself.
+5. **Report back** as usual (sidecar path, per-file count, top-3 findings, open command).
+
+The voice in the sidecar is Codex's. Don't translate or paraphrase its findings before writing — they're being written by it directly via this delegation.
 
 ## Empty result
 

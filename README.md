@@ -37,12 +37,14 @@ Claude revises the plan, flips each comment's `state` to `done` (or `ack` if no 
 ### Auto-drafting a review
 
 ```
-/draft-review            # working tree vs HEAD
-/draft-review main       # main..HEAD
+/draft-review                  # working tree vs HEAD (Claude)
+/draft-review main             # main..HEAD (Claude)
 /draft-review main HEAD~2
+/draft-review --codex          # delegate the analysis to the codex CLI (OpenAI)
+/draft-review --codex main     # codex on main..HEAD
 ```
 
-Claude reads the diff, looks for review-worthy findings (correctness, security, performance, maintainability, missing tests/docs), and writes each one as an inline comment in the sidecar. Then run `/open-review diff` to triage them — accept with **LGTM**/**Done**, dismiss with **Ack**, or push back with a reply (Claude can dispute its own findings on a follow-up `/apply-review`). Keeps the surface area of `/review`, `/code-review`, and `/security-review` untouched — those still produce text reports.
+Claude (or Codex with `--codex`) reads the diff, looks for review-worthy findings (correctness, security, performance, maintainability, missing tests/docs), and writes each one as an inline comment in the sidecar. Run `/open-review diff` to triage — accept with **LGTM**/**Done**, dismiss with **Ack**, or push back with a reply (Claude can dispute its own findings on a follow-up `/apply-review`). Keeps the surface area of `/review`, `/code-review`, and `/security-review` untouched — those still produce text reports.
 
 ### Reviewing a code change
 
