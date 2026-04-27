@@ -68,10 +68,12 @@ Confirm with the user before proceeding if the diff touches more than 20 files.
    - `side: "left"` for "explain this removal" or "this should be restored" findings (line numbers in the old file).
    - `quotedText` must exactly match the line text on the chosen side, or `/apply-review` will fail to anchor.
 
-6. **Compute the sidecar slug** from the target:
+6. **Compute the sidecar slug** from the target. **Always use the user's original ref strings** from `$ARGUMENTS` — never the resolved SHAs. The server uses the same rule, so the filenames must match exactly:
    - working tree, base `HEAD` → `working`
-   - working tree, base other → `working-vs-<base>` (replace any non `[A-Za-z0-9._-]` with `-`)
-   - range `<base>..<head>` → `<base>..<head>` (same sanitization)
+   - working tree, base other → `working-vs-<base>` (replace any character not in `[A-Za-z0-9._-]` with `-`)
+   - range `<base>..<head>` → `<base>..<head>` then the same character sanitization (so `HEAD~1..HEAD` becomes `HEAD-1..HEAD`)
+
+   The resolved `baseSha` and `headSha` go inside the review object as data fields, but **must not** appear in the sidecar filename.
 
 7. **Write the sidecar** at `<repoRoot>/.plan-review/<slug>.comments.json`:
    - If the file does not exist, create the parent directory and write the diff-target shape:
