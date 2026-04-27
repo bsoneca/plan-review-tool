@@ -16,6 +16,7 @@ This clones, builds the bundle, installs `plan-review` on your PATH, and drops t
 
 - `/open-review` — launches the browser UI.
 - `/apply-review` — Claude reads the saved comments, edits the code/plan, and updates each comment's state.
+- `/draft-review` — Claude does a code-review pass and writes its findings as inline comments in the sidecar, ready for you to open and triage.
 
 ## Use
 
@@ -32,6 +33,16 @@ Hover any line, click the gutter `+`, write the comment. Drag a range first to a
 ```
 
 Claude revises the plan, flips each comment's `state` to `done` (or `ack` if no change was warranted), and writes a one-sentence `resolutionNote`.
+
+### Auto-drafting a review
+
+```
+/draft-review            # working tree vs HEAD
+/draft-review main       # main..HEAD
+/draft-review main HEAD~2
+```
+
+Claude reads the diff, looks for review-worthy findings (correctness, security, performance, maintainability, missing tests/docs), and writes each one as an inline comment in the sidecar. Then run `/open-review diff` to triage them — accept with **LGTM**/**Done**, dismiss with **Ack**, or push back with a reply (Claude can dispute its own findings on a follow-up `/apply-review`). Keeps the surface area of `/review`, `/code-review`, and `/security-review` untouched — those still produce text reports.
 
 ### Reviewing a code change
 
