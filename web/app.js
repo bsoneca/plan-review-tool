@@ -30,6 +30,7 @@ const store = {
   viewedFiles: new Set(),
   snapshots: [],
   fileCompareRange: {},
+  fileCollapsed: {},
   // thread UI
   expandedLgtm: new Set(),
 };
@@ -1138,6 +1139,88 @@ function setCompareRange(filePath, range) {
   store.fileCompareRange[filePath] = range;
 }
 
+const COLLAPSE_CONTEXT = 3;
+const COLLAPSE_MIN_RUN = 6;
+
+function buildCollapseToggle(f) {
+  const btn = document.createElement("button");
+  btn.className = "btn btn-ghost collapse-toggle";
+  btn.textContent = store.fileCollapsed[f.path] ? "Expand all" : "Collapse";
+  btn.title = "Collapse long runs of unchanged code";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    store.fileCollapsed[f.path] = !store.fileCollapsed[f.path];
+    insertDiffThreads();
+    btn.textContent = store.fileCollapsed[f.path] ? "Expand all" : "Collapse";
+  });
+  return btn;
+}
+
+function applyCollapseToTable(table) {
+  // Reset prior collapse state on this table.
+  for (const ph of table.querySelectorAll("tr.diff-collapsed-placeholder")) ph.remove();
+  for (const tr of table.querySelectorAll('tr.diff-row[data-collapsed="1"]')) {
+    tr.style.display = "";
+    tr.removeAttribute("data-collapsed");
+  }
+
+  const allRows = [...table.querySelectorAll("tr.diff-row")];
+  if (allRows.length === 0) return;
+
+  // Mark rows that must stay visible: changed rows, OR rows immediately followed
+  // by a thread-row (a comment is anchored there).
+  const isAnchor = allRows.map((r) => {
+    if (r.querySelector(".kind-add, .kind-del")) return true;
+    const next = r.nextElementSibling;
+    if (next && next.classList.contains("diff-thread-row")) return true;
+    return false;
+  });
+
+  const mustKeep = new Array(allRows.length).fill(false);
+  for (let i = 0; i < allRows.length; i++) {
+    if (isAnchor[i]) {
+      const lo = Math.max(0, i - COLLAPSE_CONTEXT);
+      const hi = Math.min(allRows.length - 1, i + COLLAPSE_CONTEXT);
+      for (let j = lo; j <= hi; j++) mustKeep[j] = true;
+    }
+  }
+
+  // Walk and collapse runs of !mustKeep.
+  let runStart = -1;
+  for (let i = 0; i <= allRows.length; i++) {
+    const collapsible = i < allRows.length && !mustKeep[i];
+    if (collapsible && runStart === -1) runStart = i;
+    if (!collapsible && runStart !== -1) {
+      const len = i - runStart;
+      if (len >= COLLAPSE_MIN_RUN) {
+        installCollapsePlaceholder(allRows.slice(runStart, i));
+      }
+      runStart = -1;
+    }
+  }
+}
+
+function installCollapsePlaceholder(rows) {
+  const tr = document.createElement("tr");
+  tr.className = "diff-collapsed-placeholder";
+  const td = document.createElement("td");
+  td.colSpan = 4;
+  td.innerHTML = `<span class="chevron">▾</span> <span class="muted">Show ${rows.length} unchanged line${rows.length === 1 ? "" : "s"}</span>`;
+  tr.appendChild(td);
+  tr.addEventListener("click", () => {
+    for (const r of rows) {
+      r.style.display = "";
+      r.removeAttribute("data-collapsed");
+    }
+    tr.remove();
+  });
+  rows[0].parentElement.insertBefore(tr, rows[0]);
+  for (const r of rows) {
+    r.style.display = "none";
+    r.dataset.collapsed = "1";
+  }
+}
+
 async function fetchFileDiff(filePath, range) {
   const pills = snapshotPills();
   const fromRef = pills[range.from]?.ref || "BASE";
@@ -1320,6 +1403,7 @@ async function renderFileSection(f, section) {
   if (store.snapshots.length > 0) {
     header.appendChild(buildSnapshotPicker(f));
   }
+  header.appendChild(buildCollapseToggle(f));
 
   section.appendChild(header);
 
@@ -1489,6 +1573,21 @@ function insertDiffThreads() {
       cell.appendChild(dom);
       threadRow.appendChild(cell);
       anchor.insertAdjacentElement("afterend", threadRow);
+    }
+    // Apply per-file collapse if requested.
+    const table = document.querySelector(
+      `.file-section[data-file="${cssAttr(f.path)}"] table.diff-table`,
+    );
+    if (table) {
+      if (store.fileCollapsed[f.path]) applyCollapseToTable(table);
+      else {
+        // Ensure any prior collapse is cleared if the toggle was flipped off.
+        for (const ph of table.querySelectorAll("tr.diff-collapsed-placeholder")) ph.remove();
+        for (const tr of table.querySelectorAll('tr.diff-row[data-collapsed="1"]')) {
+          tr.style.display = "";
+          tr.removeAttribute("data-collapsed");
+        }
+      }
     }
   }
 }

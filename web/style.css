@@ -715,6 +715,23 @@ body.mode-diff .plan-only { display: none; }
   font-size: 11px;
   letter-spacing: 0.2em;
 }
+
+.diff-table tr.diff-collapsed-placeholder td {
+  background: #f1f8ff;
+  color: var(--accent);
+  text-align: center;
+  padding: 6px 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+  border-top: 1px dashed #b6d4fe;
+  border-bottom: 1px dashed #b6d4fe;
+  user-select: none;
+}
+.diff-table tr.diff-collapsed-placeholder td:hover { background: #ddeeff; }
+.diff-table tr.diff-collapsed-placeholder .chevron { font-weight: 700; margin-right: 6px; }
+
+button.collapse-toggle { font-size: 11px; padding: 3px 10px; }
 .diff-table tr.diff-thread-row td {
   padding: 0;
   background: #f8f9fa;
