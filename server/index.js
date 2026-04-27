@@ -1,6 +1,8 @@
 const path = require('path');
+const { spawn } = require('child_process');
 const express = require('express');
 const { readPlan } = require('./target');
+const { sidecarFor } = require('./paths');
 const { fetchDiff, fetchDiffBetween, sideBySide, fetchFileContent } = require('./diff');
 const { loadSidecar, appendReview, patchReview, patchComment, addReply } = require('./reviews');
 const { listSnapshots, readSnapshotFile } = require('./snapshots');
@@ -15,6 +17,47 @@ function createApp(target) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static(path.join(__dirname, '..', 'web')));
+
+  let currentApply = null;
+
+  app.post('/api/apply', (req, res) => {
+    if (currentApply) {
+      return res.status(409).json({ error: 'An apply is already in progress' });
+    }
+    let sidecar;
+    try {
+      sidecar = sidecarFor(target);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    const cwd = target.kind === 'diff' ? target.repoRoot : path.dirname(target.path);
+    const child = spawn('claude', ['-p', `/apply-review "${sidecar}"`], {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    currentApply = { startedAt: new Date().toISOString(), pid: child.pid };
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => {
+      currentApply = null;
+      if (!res.headersSent) {
+        res.status(500).json({ error: `Could not spawn claude: ${err.message}` });
+      }
+    });
+    child.on('exit', (code) => {
+      currentApply = null;
+      if (!res.headersSent) {
+        res.json({ exitCode: code, stdout, stderr });
+      }
+    });
+  });
+
+  app.get('/api/apply/status', (req, res) => {
+    res.json({ running: !!currentApply, startedAt: currentApply?.startedAt || null });
+  });
 
   app.get('/api/target', (req, res) => {
     try {

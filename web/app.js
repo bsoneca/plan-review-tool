@@ -405,7 +405,6 @@ function buildStateActions(t) {
   if (t.kind === "open") {
     mkBtn("LGTM", "lgtm", "Looks good to me — stamp this thread");
     mkBtn("Done", "done", "Mark as addressed");
-    mkBtn("Ack", "ack", "Acknowledge, no change needed");
   } else {
     mkBtn("Reopen", "open", "Reopen this thread");
   }
@@ -538,6 +537,56 @@ function updateSubmitButton() {
   const n = savedDrafts().length;
   btn.disabled = n === 0;
   count.textContent = String(n);
+  updateApplyButton();
+}
+
+function openCommentCount() {
+  let n = 0;
+  for (const r of store.reviews) {
+    for (const c of r.comments) {
+      if ((c.state || "open") === "open") n++;
+    }
+  }
+  return n;
+}
+
+function updateApplyButton() {
+  const btn = document.getElementById("apply-review");
+  const count = document.getElementById("apply-count");
+  if (!btn || !count) return;
+  const n = openCommentCount();
+  if (!btn.dataset.busy) btn.disabled = n === 0;
+  count.textContent = String(n);
+}
+
+function wireApplyButton() {
+  const btn = document.getElementById("apply-review");
+  if (!btn || btn.dataset.wired === "1") return;
+  btn.dataset.wired = "1";
+  btn.addEventListener("click", async () => {
+    const n = openCommentCount();
+    if (n === 0) return;
+    if (!confirm(`Run /apply-review on ${n} open comment${n === 1 ? "" : "s"}?\n\nThis spawns 'claude -p' to apply the comments to your files.`)) return;
+    btn.dataset.busy = "1";
+    btn.disabled = true;
+    btn.textContent = "Applying…";
+    try {
+      const res = await fetch("/api/apply", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(`Apply failed: ${data.error || res.statusText}`);
+      } else if (data.exitCode !== 0) {
+        alert(`Claude exited with code ${data.exitCode}\n\n${(data.stderr || data.stdout || "").slice(0, 1200)}`);
+      }
+      // Refresh — files and sidecar may have changed.
+      location.reload();
+    } catch (err) {
+      alert(`Apply failed: ${err.message}`);
+      delete btn.dataset.busy;
+      btn.disabled = false;
+      btn.innerHTML = `Apply <span id="apply-count" class="badge">${openCommentCount()}</span>`;
+    }
+  });
 }
 
 function refresh() {
@@ -1084,6 +1133,7 @@ async function bootPlanMode(target) {
   wirePlanTopbar();
   wirePlanSelectionButton();
   wireSubmitDialog();
+  wireApplyButton();
   applyPlanView(viewFromUrl());
   updateSubmitButton();
 }
@@ -1619,6 +1669,7 @@ async function bootDiffMode(target) {
   renderFileTree();
   await renderDiffPane();
   wireSubmitDialog();
+  wireApplyButton();
   wireDiffKeyboard();
   updateSubmitButton();
 }
